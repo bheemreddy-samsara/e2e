@@ -31,7 +31,9 @@ const test = base.extend<{ e2e: HostSession<{ device: Device }> }>({
     try {
       await use(session);
     } finally {
-      await session.close();
+      // Cleanup failures come back instead of being thrown: a leaked device fails the test here.
+      const failures = await session.close();
+      if (failures.length > 0) throw new Error(`e2e cleanup failed: ${failures.map((f) => f.message).join('; ')}`);
     }
   },
 });
@@ -76,7 +78,8 @@ step's `status`, `durationMs`, `modelCalls`, and a redacted `error`.
 | `close()` | Ends the session and releases its devices or browsers. Resolves with cleanup failures instead of throwing; calling it again is a no-op |
 
 A session is `AsyncDisposable`, so `await using session = await openSession()`
-closes it when the scope ends.
+closes it when the scope ends and throws an `AggregateError` of any cleanup
+failures.
 
 <Note>
 A session runs a single attempt with no retries, and it writes no run report.
@@ -85,5 +88,5 @@ Video follows the target's `video` mode as a first attempt would. A mode that
 keeps video only on failure records nothing, because a session never fails as
 a whole.
 
-Each session prepares and releases its own engine, including any `DeviceProvider` lease. A test-scoped fixture leases a device per test. Scope the fixture to the worker to keep one device across tests, and open a session per test only when each test needs a fresh one.
+Each session prepares and releases its own engine, including any `DeviceProvider` lease. Use a test-scoped fixture to give each test its own attempt, deadline, steps, and artifacts. A worker-scoped fixture shares one session across tests: they share its deadline, step history, and artifact directory, and a retry does not get a fresh attempt.
 </Note>

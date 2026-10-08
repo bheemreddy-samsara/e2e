@@ -63,7 +63,9 @@ export interface HostSession<Fixtures extends object = Record<string, unknown>> 
   /**
    * Ends the session: closes the engine session, releases leased devices or
    * browsers, stops app processes, and resolves with the cleanup failures
-   * instead of throwing them. Idempotent.
+   * instead of throwing them. Idempotent. Disposing the session
+   * (`await using`) closes it the same way and throws an `AggregateError` of
+   * those failures instead.
    */
   close(): Promise<readonly SerializedError[]>;
 }
@@ -111,8 +113,12 @@ export async function openSession<Fixtures extends object = Record<string, unkno
     artifactsDir: attempt.artifactsDir,
     steps: () => attempt.steps.all(),
     close,
+    // `await using` has no result to hand back, so cleanup failures are thrown instead of dropped.
     [Symbol.asyncDispose]: async () => {
-      await close();
+      const failures = await close();
+      if (failures.length > 0) {
+        throw new AggregateError(failures, `closing the e2e session failed: ${failures.map((failure) => failure.message).join('; ')}`);
+      }
     },
   };
 }

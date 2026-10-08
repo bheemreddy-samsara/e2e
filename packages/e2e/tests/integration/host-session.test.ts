@@ -2,7 +2,8 @@
  * `e2e/host` on the fake engine, from a config file as a host's project has
  * one: a session opens the target's engine with its fixtures, streams step
  * progress, lists its steps, needs a target when the config declares
- * several, and tears the engine down on close, once.
+ * several, tears the engine down on close, once, cancels a fixture call
+ * still running when it closes, and reports cleanup failures.
  */
 
 import { mkdtempSync, rmSync, writeFileSync } from 'node:fs';
@@ -58,6 +59,44 @@ describe('openSession', { timeout: 60_000 }, () => {
     expect(await session.close()).toEqual([]);
     expect(await session.close()).toEqual([]);
     expect(fake.stats()).toMatchObject({ inits: 1, attemptsStarted: 1, attemptsEnded: 1, disposes: 1 });
+  });
+
+  it('cancels a fixture call still running when the session closes', async () => {
+    let performing!: () => void;
+    const started = new Promise<void>((resolve) => (performing = resolve));
+    const fake = createFakeEngine({
+      perform: (_ref, _action, operation) =>
+        new Promise<void>((_resolve, reject) => {
+          performing();
+          operation.signal.addEventListener('abort', () => reject(operation.signal.reason), { once: true });
+        }),
+    });
+    writeConfig({ kiosk: fake });
+    const session = await openSession({ cwd: dir, env: {}, timeout: 30_000 });
+    const click = session.fixtures.screen.getByRole('button', 'Submit').click();
+    const settled = click.then(
+      () => 'resolved',
+      () => 'rejected',
+    );
+    await started;
+    await session.close();
+    expect(await settled).toBe('rejected');
+    expect(fake.stats()).toMatchObject({ attemptsEnded: 1, disposes: 1 });
+  });
+
+  it('returns cleanup failures from close and throws them from disposal', async () => {
+    const failing = () => createFakeEngine({ onEndAttempt: () => Promise.reject(new Error('device stuck')) });
+    writeConfig({ kiosk: failing() });
+    const session = await openSession({ cwd: dir, env: {} });
+    const failures = await session.close();
+    expect(failures.map((failure) => failure.message).join()).toContain('device stuck');
+
+    writeConfig({ kiosk: failing() });
+    const disposed = (async () => {
+      await using disposable = await openSession({ cwd: dir, env: {} });
+      expect(disposable.target).toBe('kiosk');
+    })();
+    await expect(disposed).rejects.toBeInstanceOf(AggregateError);
   });
 
   it('needs a target when the config declares several, and opens the one named', async () => {
