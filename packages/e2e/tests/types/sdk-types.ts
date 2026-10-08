@@ -587,3 +587,12 @@ describe('group', { tags: ['smoke'] }, () => {
 describe('async group', async () => {});
 // @ts-expect-error a suite hook sees suite fixtures only
 beforeAll((fixtures) => void fixtures.screen);
+
+// e2e/host: a session's fixtures carry the engine's on top of the built-ins, and it closes without throwing.
+declare const hostSession: import('../../src/host/index.ts').HostSession<{ device: { tap(): void } }>;
+void (hostSession.fixtures.agent satisfies Agent);
+void (hostSession.fixtures.device.tap satisfies () => void);
+void (hostSession.close() satisfies Promise<readonly import('../../src/host/index.ts').SerializedError[]>);
+void (hostSession satisfies AsyncDisposable);
+// @ts-expect-error the session's steps are the report's, read-only
+hostSession.steps().push();

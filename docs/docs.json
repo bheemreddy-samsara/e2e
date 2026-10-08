@@ -227,6 +227,7 @@
               "reference/config",
               "reference/cli",
               "reference/mcp",
+              "reference/host",
               "reference/reporters",
               "reference/environment",
               "reference/errors"

@@ -47,6 +47,10 @@
       "types": "./dist/agent/public.d.ts",
       "default": "./dist/agent/public.js"
     },
+    "./host": {
+      "types": "./dist/host/index.d.ts",
+      "default": "./dist/host/index.js"
+    },
     "./engine": {
       "types": "./dist/engine/index.d.ts",
       "default": "./dist/engine/index.js"
