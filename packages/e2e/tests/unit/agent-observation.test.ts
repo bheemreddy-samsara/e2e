@@ -26,6 +26,60 @@ function observation(tree: SemanticNode, pixels?: Observation['pixels']): Extrac
 const NO_REDACT = (text: string): string => text;
 
 describe('prepareObservation', () => {
+  it('keeps default serialization identical while emitting private scalar and cut positions', () => {
+    const href = 'https://app.invalid/' + 'X'.repeat(252) + 'abcdef';
+    const raw = observation(node('odd"id', {
+      role: 'opaque"role', name: 'X'.repeat(253) + 'abc',
+      text: 'X  '.repeat(169) + 'XXabc', testId: 'same"text',
+      value: 'same"text sel\\界😀', selection: 'sel\\界😀', inputPurpose: 'username',
+      attributes: { href }, states: { focused: true, disabled: true },
+      children: [node('child', { attributes: { placeholder: 'same"text' } })],
+    }));
+    const options = { redact: NO_REDACT, redactCut: NO_REDACT, maxBytes: 4096, appOrigin: 'https://app.invalid' };
+    const normal = prepareObservation(raw, options);
+    const fields: Parameters<NonNullable<Parameters<typeof prepareObservation>[1]['onField']>>[0][] = [];
+    const recorded = prepareObservation(raw, { ...options, onField: (field) => { fields.push(field); } });
+    expect(recorded).toEqual(normal);
+    expect(recorded).not.toHaveProperty('fields');
+    expect(normal.text).toContain('#odd"id opaque"role');
+    expect(normal.text).toContain('href="/' + 'X'.repeat(252) + 'abc…"');
+    expect(fields.map(({ start, contentEnd, quoted }) => {
+      const token = recorded.text.slice(start, contentEnd);
+      return quoted ? JSON.parse(token + '"') : token;
+    })).toEqual([
+      'odd"id', 'opaque"role', 'X'.repeat(253) + 'abc', 'X '.repeat(169) + 'XXabc',
+      'same"text', '/' + 'X'.repeat(252) + 'abc', 'same"text sel\\界😀', 'sel\\界😀', 'username',
+      'focused', 'disabled', 'child', 'same"text',
+    ]);
+    expect(fields.filter(({ cut }) => cut).map(({ start, contentEnd }) => recorded.text.slice(start, contentEnd))).toEqual([
+      JSON.stringify('X'.repeat(253) + 'abc').slice(0, -1),
+      JSON.stringify('X '.repeat(169) + 'XXabc').slice(0, -1),
+      JSON.stringify('/' + 'X'.repeat(252) + 'abc').slice(0, -1),
+    ]);
+    for (let index = 1; index < fields.length; index++) expect(fields[index]!.start).toBeGreaterThanOrEqual(fields[index - 1]!.end);
+  });
+
+  it('omits checkpoint selections before emission without changing ordinary formatter or executor behavior', () => {
+    const raw = observation(node('odd"id', {
+      role: 'textbox', value: 'abcdef', selection: 'bcd', states: { focused: true },
+      children: [node('child', { role: 'textbox', text: 'public words', selection: 'words' })],
+    }));
+    const options = { redact: NO_REDACT, redactCut: NO_REDACT, maxBytes: 4096 };
+    const fields: Parameters<NonNullable<Parameters<typeof prepareObservation>[1]['onField']>>[0][] = [];
+    const projected = prepareObservation(raw, { ...options, withholdSelections: true, onField: (field) => { fields.push(field); } });
+    expect(projected.text).toBe('#odd"id textbox value="abcdef" [focused]\n #child textbox text="public words"');
+    expect(fields.map(({ start, contentEnd, quoted }) => {
+      const token = projected.text.slice(start, contentEnd);
+      return quoted ? JSON.parse(token + '"') : token;
+    })).toEqual(['odd"id', 'textbox', 'abcdef', 'focused', 'child', 'textbox', 'public words']);
+    const ordinary = prepareObservation(raw, options);
+    expect(ordinary.text).toContain('value="abcdef" selection="bcd" [focused]');
+    expect(ordinary.text).toContain('text="public words" selection="words"');
+    if (ordinary.kind !== 'semantic') throw new Error('expected semantics');
+    expect(projectTree(ordinary.tree).selection).toBe('bcd');
+    expect(raw.tree.selection).toBe('bcd');
+  });
+
   it('keeps unavailable semantics separate from an empty tree and requires permitted masked evidence', () => {
     const pixels = { data: new Uint8Array(4), mediaType: 'image/png' as const, width: 2, height: 2, scale: 1 };
     const unavailable: Observation = {

@@ -722,3 +722,22 @@ session.steps().push({} as StepRecord);
 session.tracePath = '/tmp/trace.md';
 // @ts-expect-error closing returns a read-only list of failures
 (await session.close()).push({} as SerializedError);
+
+// Hosted checkpoint policy never enables a model or accepts a screenshot hook.
+({ name: "debug", debugCheckpoints: { pixels: true, maxSteps: 10, maxBytes: 1048576, captureTimeout: 250, retain: "on" } }) satisfies OpenSessionOptions;
+// @ts-expect-error checkpoints are a policy, not a progress callback.
+({ name: "debug", debugCheckpoints: async () => undefined }) satisfies OpenSessionOptions;
+// @ts-expect-error retention is closed and independent of model vision.
+({ name: "debug", debugCheckpoints: { retain: "sometimes" } }) satisfies OpenSessionOptions;
+// @ts-expect-error debug capture does not enable model vision.
+({ name: "debug", debugCheckpoints: { vision: true } }) satisfies OpenSessionOptions;
+declare const checkpointSession: E2ESession;
+checkpointSession.checkpoints() satisfies readonly import("../../src/runner.ts").DebugCheckpoint[];
+const checkpoint = checkpointSession.checkpoints()[0]!;
+checkpoint.observationId satisfies string | undefined;
+if (checkpoint.image.status === "available") checkpoint.image.artifactId satisfies string;
+if (checkpoint.semantics.status === "available") checkpoint.semantics.text satisfies string;
+// @ts-expect-error raw trees and XML never cross this API.
+checkpoint.xml;
+// @ts-expect-error SDK owns the evidence record.
+checkpoint.stepId = "other";

@@ -9,7 +9,8 @@ import { writeFileAtomic } from '../internal/atomic-write.ts';
 import type { ArtifactStore } from '../types.ts';
 import type { ArtifactRegistration, ArtifactSink } from './fixtures.ts';
 import type { ArtifactRecord } from './records.ts';
-import { redactsDownloads, type SessionSecrecy } from './secrecy.ts';
+import { checkpointUnavailableBytesProven } from './checkpoint-unavailable.ts';
+import { redactsDownloads, prospectiveSecretResolutionsProven, type SessionSecrecy } from './secrecy.ts';
 
 /**
  * How much of each kind the runner masked. A
@@ -39,6 +40,12 @@ export interface AttemptArtifacts {
   /** Report-order artifact records; the sink appends to this array. */
   readonly records: ArtifactRecord[];
   readonly sink: ArtifactSink;
+  /** SDK ticketed evidence only, never discovered by scanning filenames. */
+  readonly debugEvidence: ReadonlySet<string>;
+  readonly debugPaths: ReadonlyMap<string, string>;
+  readonly debugCheckpoints: ReadonlyMap<string, DebugCheckpointAssociation>;
+  /** Capture-start proof, checked against the live ledger and fill taint. */
+  debugRedactionProven(id: string): boolean;
   /**
    * Resolves once every registered file has been measured and hashed.
    * Registration itself is synchronous and cheap; the size and digest of a
@@ -47,6 +54,104 @@ export interface AttemptArtifacts {
    * complete.
    */
   settle(): Promise<void>;
+}
+
+/** Private association copied from an actual checkpoint capture, never parsed from IDs. */
+export interface DebugCheckpointAssociation {
+  readonly checkpointId: string;
+  readonly phase: "before" | "after";
+  readonly observationId: string | null;
+  readonly observationRevision: string | null;
+}
+type DebugEvidenceKind = "pixels" | "checkpoint-json" | "checkpoint-unavailable";
+interface DebugRedactionProof {
+  readonly secrecy: SessionSecrecy;
+  readonly values: number;
+  readonly complete: boolean;
+}
+interface DebugTicket {
+  readonly sink: ArtifactSink;
+  readonly kind: DebugEvidenceKind;
+  readonly proof: DebugRedactionProof | undefined;
+  readonly attemptId: string | undefined;
+  checkpoint?: DebugCheckpointAssociation;
+  stepId?: string;
+  startedAt?: string;
+  expected?: { readonly size: number; readonly sha256: string };
+  invalid?: boolean;
+}
+const debugSinks = new WeakMap<ArtifactSink, { readonly attemptId: string; readonly proof: () => DebugRedactionProof | undefined }>();
+const debugRegistrations = new WeakMap<ArtifactRegistration, DebugTicket>();
+const consumedDebugRegistrations = new WeakSet<ArtifactRegistration>();
+
+/** Begins SDK pixel proof before capture, or JSON proof after final field redaction. */
+export function debugEvidenceRegistration(sink: ArtifactSink, kind: DebugEvidenceKind = "pixels"): ArtifactRegistration {
+  const registration: ArtifactRegistration = { debugEvidence: true };
+  const source = debugSinks.get(sink);
+  debugRegistrations.set(registration, { sink, kind, proof: source?.proof(), attemptId: source?.attemptId });
+  return registration;
+}
+
+/** Binds owned bounded identity without cloning the original capture ticket. */
+export function associateDebugCheckpoint(registration: ArtifactRegistration, association: DebugCheckpointAssociation, facts: Pick<ArtifactRegistration, "stepId" | "startedAt">): ArtifactRegistration {
+  const ticket = debugRegistrations.get(registration);
+  if (ticket === undefined) return registration;
+  const identity = (value: unknown): value is string => typeof value === "string" && value.length > 0 && Buffer.byteLength(value) <= 1024 && !Array.from(value).some((character) => character.charCodeAt(0) < 32 || character.charCodeAt(0) === 127);
+  const optionalIdentity = (value: unknown): boolean => value === null || identity(value);
+  if (association === null || typeof association !== "object" || Array.isArray(association) || ticket.checkpoint !== undefined || !identity(association.checkpointId) || !["before", "after"].includes(association.phase) ||
+      !optionalIdentity(association.observationId) || !optionalIdentity(association.observationRevision) ||
+      (association.observationId === null) !== (association.observationRevision === null)) {
+    ticket.invalid = true;
+    return registration;
+  }
+  if (facts === null || typeof facts !== "object") { ticket.invalid = true; return registration; }
+  if (facts.stepId !== undefined) {
+    if (!identity(facts.stepId)) { ticket.invalid = true; return registration; }
+    ticket.stepId = facts.stepId;
+  }
+  if (facts.startedAt !== undefined) ticket.startedAt = facts.startedAt;
+  ticket.checkpoint = Object.freeze({ checkpointId: association.checkpointId, phase: association.phase, observationId: association.observationId, observationRevision: association.observationRevision });
+  Object.assign(registration, facts);
+  return registration;
+}
+
+/** Rechecks the original SDK ticket before any retained pixels leave memory. */
+export function debugEvidenceProven(sink: ArtifactSink, registration: ArtifactRegistration): boolean {
+  const ticket = debugRegistrations.get(registration);
+  return ticket?.sink === sink && ticket.invalid !== true && debugProofValid(ticket.proof, ticket.kind);
+}
+
+/** Binds original producer bytes once, retaining only immutable size/SHA and never a mutable buffer. */
+export function bindDebugEvidenceBytes(sink: ArtifactSink, registration: ArtifactRegistration, bytes: Uint8Array): void {
+  const ticket = debugRegistrations.get(registration);
+  if (ticket?.sink !== sink || ticket.invalid === true) return;
+  if (ticket.expected !== undefined) { ticket.invalid = true; return; }
+  ticket.expected = Object.freeze({ size: bytes.byteLength, sha256: createHash('sha256').update(bytes).digest('hex') });
+}
+
+/** Original byte/live-proof check before first write; SDK-facts additionally require closed canonical bytes. */
+export function debugEvidenceBytesProven(sink: ArtifactSink, registration: ArtifactRegistration, bytes: Uint8Array): boolean {
+  const ticket = debugRegistrations.get(registration);
+  return debugEvidenceProven(sink, registration) && ticket !== undefined && ticketBytesProven(ticket, bytes);
+}
+
+/** The same consumed original ticket supplies the post-read guard, not public registration copies. */
+function ticketBytesProven(ticket: DebugTicket, bytes: Uint8Array): boolean {
+  const expected = ticket.expected;
+  return ticket.invalid !== true && expected !== undefined && expected.size === bytes.byteLength &&
+    expected.sha256 === createHash('sha256').update(bytes).digest('hex') &&
+    (ticket.kind !== "checkpoint-unavailable" || ticket.attemptId !== undefined &&
+      checkpointUnavailableBytesProven(bytes, { attemptId: ticket.attemptId, stepId: ticket.stepId,
+        attemptedAt: ticket.startedAt, association: ticket.checkpoint }));
+}
+
+/** Checks live secrecy without provider calls, new waits or retrospective pixel repair. */
+function debugProofValid(proof: DebugRedactionProof | undefined, kind: DebugEvidenceKind): boolean {
+  if (proof === undefined) return false;
+  // This ticket is for SDK-only missing-evidence facts. It never authorizes app content or pixels.
+  if (kind === "checkpoint-unavailable") return prospectiveSecretResolutionsProven(proof.secrecy.ledger, "sdk-facts");
+  return proof.complete && prospectiveSecretResolutionsProven(proof.secrecy.ledger) &&
+    proof.values === proof.secrecy.ledger.entries().length && (kind === "checkpoint-json" || !proof.secrecy.exposure.withholdsPixels);
 }
 
 /**
@@ -87,14 +192,21 @@ export function createAttemptArtifacts(options: {
   mkdirSync(dir, { recursive: true });
   const records: ArtifactRecord[] = [];
   const pending: Promise<void>[] = [];
+  const debugEvidence = new Set<string>();
+  const debugPaths = new Map<string, string>();
+  const debugCheckpoints = new Map<string, DebugCheckpointAssociation>();
+  const debugProofs = new Map<string, { readonly proof: DebugRedactionProof | undefined; readonly kind: DebugEvidenceKind; readonly valid: boolean; bytesValid?: boolean }>();
 
   const sink: ArtifactSink = {
     dir,
     register: (kind, relativePath, registration?: ArtifactRegistration) => {
       const id = `${options.attemptId}:artifact:${records.length}`;
       const absolute = path.join(dir, relativePath);
-      const stepId = options.currentStepId?.();
-      const startedAt = registration?.startedAt;
+      const ticket = registration === undefined ? undefined : debugRegistrations.get(registration);
+      const consumed = registration !== undefined && consumedDebugRegistrations.has(registration);
+      const checkpointTicket = ticket !== undefined && (ticket.checkpoint !== undefined || ticket.kind === "checkpoint-json" || ticket.kind === "checkpoint-unavailable");
+      const stepId = checkpointTicket ? ticket.stepId : registration?.stepId ?? options.currentStepId?.();
+      const startedAt = checkpointTicket ? ticket.startedAt : registration?.startedAt;
       const record: ArtifactRecord = {
         id,
         kind,
@@ -104,6 +216,35 @@ export function createAttemptArtifacts(options: {
         producer: stepId === undefined ? { kind: 'attempt' } : { kind: 'step', stepId },
       };
       records.push(record);
+      debugPaths.set(id, relativePath);
+      if (registration?.debugEvidence === true) {
+        const valid = ticket?.sink === sink && ticket.invalid !== true &&
+          (ticket.kind === "pixels" ? kind === "screenshot" : kind === "log" && record.mediaType === "application/json" && ticket.checkpoint !== undefined &&
+            (ticket.kind !== "checkpoint-unavailable" || ticket.checkpoint.observationId === null && ticket.checkpoint.observationRevision === null));
+        debugProofs.set(id, { proof: ticket?.proof, kind: ticket?.kind ?? "pixels", valid });
+        if (valid) {
+          debugEvidence.add(id);
+          if (ticket.checkpoint !== undefined) debugCheckpoints.set(id, ticket.checkpoint);
+        }
+      }
+      // Consume original identities even if a public marker was removed; no spent ticket can revive.
+      if (registration !== undefined) {
+        debugRegistrations.delete(registration);
+        if (ticket !== undefined) consumedDebugRegistrations.add(registration);
+      }
+      const checkpointBytesValid = (bytes: Uint8Array | undefined): boolean => {
+        if (!checkpointTicket && !consumed) return true;
+        const valid = !consumed && ticket?.sink === sink && debugProofs.get(id)?.valid === true &&
+          bytes !== undefined && ticketBytesProven(ticket, bytes) && debugProofValid(ticket.proof, ticket.kind) &&
+          options.secrecy?.() === ticket.proof?.secrecy;
+        const proof = debugProofs.get(id);
+        if (proof !== undefined) proof.bytesValid = valid;
+        if (!valid) {
+          record.redaction = 'incomplete';
+          debugEvidence.delete(id);
+        }
+        return valid;
+      };
       const reportPath = path.posix.join(...options.segments, relativePath);
       const secrecy: SessionSecrecy | undefined = kind === 'download' ? options.secrecy?.() : undefined;
       pending.push(
@@ -116,6 +257,15 @@ export function createAttemptArtifacts(options: {
           // and hashed from that same buffer. A file that never appeared is
           // recorded without size or digest either way.
           if (options.store === undefined) {
+            // CP bytes are bounded; their original receipt/closed protocol must be checked after I/O too.
+            if (checkpointTicket || consumed) {
+              const bytes = await readFile(absolute).catch(() => undefined);
+              if (!checkpointBytesValid(bytes) || bytes === undefined) return;
+              record.path = reportPath;
+              record.size = bytes.byteLength;
+              record.sha256 = createHash('sha256').update(bytes).digest('hex');
+              return;
+            }
             const measured = await measure(absolute);
             if (measured === undefined) return;
             record.path = reportPath;
@@ -124,7 +274,7 @@ export function createAttemptArtifacts(options: {
             return;
           }
           const bytes = await readFile(absolute).catch(() => undefined);
-          if (bytes === undefined) return;
+          if (!checkpointBytesValid(bytes) || bytes === undefined) return;
           record.path = reportPath;
           record.size = bytes.byteLength;
           record.sha256 = createHash('sha256').update(bytes).digest('hex');
@@ -195,12 +345,20 @@ export function createAttemptArtifacts(options: {
     },
   };
 
+  debugSinks.set(sink, { attemptId: options.attemptId, proof: () => {
+    const secrecy = options.secrecy?.();
+    return secrecy === undefined ? undefined : { secrecy, values: secrecy.ledger.entries().length, complete: prospectiveSecretResolutionsProven(secrecy.ledger) };
+  } });
+
   const settle = async (): Promise<void> => {
     // Registrations may land while earlier ones are still hashing.
     while (pending.length > 0) await Promise.all(pending.splice(0));
   };
 
-  return { dir, records, sink, settle };
+  return { dir, records, sink, settle, debugEvidence, debugPaths, debugCheckpoints, debugRedactionProven: (id) => {
+    const entry = debugProofs.get(id);
+    return entry !== undefined && entry.valid && entry.bytesValid !== false && debugProofValid(entry.proof, entry.kind);
+  } };
 }
 
 /** What a `--last-failed` rerun's attempt directory is called, `rerun-<n>`, numbered from 1. */

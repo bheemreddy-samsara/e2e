@@ -8,6 +8,7 @@ default.
 - Read the failure
 - Error codes
 - Tools
+- Hosted debug checkpoints
 - Flaky tests
 - Is it the app?
 
@@ -118,6 +119,73 @@ jq '.run.results[] | select(.selected and .status != "passed") | .attempts[-1]
 | `command.log: '.e2e/logs/app.log'` | The app's output when it never gets ready or errors mid-test |
 | `await app.screenshot('before-submit')` | Evidence before a secret is filled; later calls fail with `POLICY_DENIED` |
 | `CI=1 npx e2e run` | Reproduce CI-only behaviour (defaults: topic running) |
+
+## Hosted debug checkpoints
+
+For `e2e/runner` hosts, set `debugCheckpoints: { pixels: true, retain: "on" }`
+on `host.openSession`. Policy options are copied before asynchronous opening;
+later mutation does not affect that attempt. Capture is SDK-owned and awaited
+at selected public step boundaries. Privacy, cancellation, deadlines, or quotas
+can record missing evidence without observing. `onStep` is nonblocking progress; never start asynchronous
+screenshots there and associate them with that step.
+
+Read `session.checkpoints()` after `session.close()`. Join `stepId` to
+`session.steps()`; the existing step artifact list owns retained JSON and
+masked PNG files under `session.artifactsDir/debug/`. Missing images carry
+explicit reasons. After a secret fill, `PIXEL_TAINTED` means no further
+pixels were requested. Capture does not enable model vision or model calls.
+Retained evidence waits for required cleanup, worker retirement, and required
+recording finalization. Images also need unchanged capture-start ledger proof
+and actual capture metadata; old pixels cannot get a fresh proof after capture. Historical
+text is re-redacted if a secret provider resolves there or during an
+operation, including short prefixes at engine, shortened-link,
+and content-quota boundaries. Quoted identities and escaped field content do
+not change those boundaries. Redaction precedes clipping; a secret marker
+can be truncated by the content quota. Viewport
+dimensions are capture-time copies; invalid geometry and its associated
+observation metadata are omitted.
+
+Checkpoint text always omits `selection`, including public selected text.
+A short substring can leak a later-resolved secret from its value or text;
+bounded historical evidence cannot prove the dependency after cuts, field
+elision, or quota loss. Do not infer an empty selection from its omission.
+Ordinary model and executor observations keep their existing selection behavior.
+
+Checkpoint content needs prospective proof before capture and the first file/store
+write, not just an empty current resolver queue. Any effective secret or credential
+password provider permanently withholds text, pixels, and engine capture metadata
+with `CAPTURE_UNAVAILABLE`, even if unused or already resolved. Providers can be
+called fresh during later recovery or disposal and return a different value.
+Only fixed missing-evidence reasons and SDK step boundary facts remain; actual
+capture associations are null. Only canonical compact SDK JSON, with at most one
+trailing newline, is permitted for these fixed facts. Arbitrary extra fields,
+duplicate keys, freeform reasons, and mismatched boundary identities are denied
+before file writes and again before artifact storage. Original private byte
+receipts bind copied pixels at capture and final masked JSON before writing;
+public metadata or copied tickets cannot renew that authorization.
+Literal/environment values keep normal redaction,
+including an environment override that replaces a provider.
+
+Pending or failed actual handoffs and unproven required cleanup also withhold
+content. Later resolution cannot restore dropped evidence. No unused provider is
+invoked, no extra resolution wait is added, and ordinary model/executor observations
+and non-checkpoint lifecycle behavior stay unchanged. Close also drops earlier
+pending images if the session became pixel-tainted.
+
+This initial option covers hosted top-level public steps only. Inner agent
+actions, nested fixture calls, and polls are not separate checkpoints.
+A replayed public step would select the same boundaries, but hosted sessions do
+not enable the runner trace cache. Do not claim an inner-action or cache
+replay timeline from this hosted evidence.
+
+Defaults are semantics only, 50 steps, 8 MiB content bytes, one second per
+capture, and failure-only retention. A passing attempt discards evidence
+before any store write. Use `retain: "on"` if the outer runner alone knows
+it failed. Bounds and the session deadline still apply. The byte quota bounds
+retained text and images, not engine peak memory or JSON overhead. Below eight
+remaining bytes, no PNG is requested; larger images can still exceed the quota
+after capture. See
+`e2e guide reference/runner` for the policy, missing reasons, and coverage.
 
 ## Flaky tests
 

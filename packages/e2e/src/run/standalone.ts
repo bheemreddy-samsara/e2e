@@ -113,7 +113,16 @@ async function openWorker(options: StandaloneHostOptions, kind: AttemptKind): Pr
   let processes: AppProcesses | undefined;
   let executor: TargetExecutor | undefined;
   let tearingDown: Promise<void> | undefined;
-  /** Releases every owner once, whichever of host close or a retiring attempt gets there first. */
+  let teardownProven = false;
+  let ownersReleased = false;
+  /** Ownership lasts through checkpoint finalization, not just engine disposal. */
+  const releaseOwners = (): void => {
+    if (ownersReleased) return;
+    ownersReleased = true;
+    releaseRegistry();
+    if (teardownProven) releaseEngine();
+  };
+  /** Ends required worker resources once, without exposing the engine before its attempt finishes. */
   const teardown = (): Promise<void> => {
     tearingDown ??= (async () => {
       // Attempt failures are the caller's to report; only teardown's own decide engine reuse.
@@ -127,9 +136,8 @@ async function openWorker(options: StandaloneHostOptions, kind: AttemptKind): Pr
       } catch (cause) { failure(cause); }
       try { await processes?.stop(failure); } catch (cause) { failure(cause); }
       try { sessionStore.cleanup(); } catch (cause) { failure(cause); }
-      releaseRegistry();
       // Failed worker teardown cannot prove this same engine is safe to reuse.
-      if (errors.length === priorFailures) releaseEngine();
+      teardownProven = errors.length === priorFailures;
     })();
     return tearingDown;
   };
@@ -151,6 +159,7 @@ async function openWorker(options: StandaloneHostOptions, kind: AttemptKind): Pr
   } catch (cause) {
     hostEnd.abort();
     await teardown();
+    releaseOwners();
     for (const error of errors) notice(target.name, error.message);
     throw cause;
   }
@@ -169,6 +178,7 @@ async function openWorker(options: StandaloneHostOptions, kind: AttemptKind): Pr
         } catch (cause) { failure(cause); }
       }
       await teardown();
+      releaseOwners();
       return errors;
     })();
     return closing;
@@ -183,13 +193,23 @@ async function openWorker(options: StandaloneHostOptions, kind: AttemptKind): Pr
       reservation = reserveAttempt(worker, sessionOptions);
     } catch (cause) { return Promise.reject(cause); }
     const pending = launchAttempt(worker, reservation, async ({ cleanup }) => {
-      if (cleanup === 'complete') {
-        state = { phase: 'idle' };
-        return;
-      }
-      state = { phase: 'retired' };
+      if (cleanup === 'complete' && !signal.aborted) return true;
+      // Keep the live attempt reachable: a concurrent host close must await its finalization.
       hostEnd.abort();
       await teardown();
+      return teardownProven;
+    }, async ({ cleanup }) => {
+      // Without checkpoints, preserve the existing post-trace retirement order.
+      if (tearingDown === undefined && cleanup !== 'complete') {
+        state = { phase: 'retired' };
+        hostEnd.abort();
+        await teardown();
+      }
+      if (tearingDown === undefined) state = { phase: 'idle' };
+      else {
+        state = { phase: 'retired' };
+        releaseOwners();
+      }
     }).then(
       (attempt) => {
         state = { phase: 'live', attempt };

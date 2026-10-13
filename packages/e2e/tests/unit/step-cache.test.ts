@@ -1375,3 +1375,45 @@ describe('cache.strict and a step whose key changed under its recording', () => 
     await expect(failure).rejects.not.toThrow('hunter2');
   });
 });
+
+
+describe("debug checkpoints around cache replay", () => {
+  it("captures the public replay boundary without adding executor work or changing cache decisions", async () => {
+    const { DebugCheckpoints } = await import("../../src/run/debug-checkpoints.ts");
+    const { StepRecorder } = await import("../../src/run/steps.ts");
+    const { AttemptBudget } = await import("../../src/run/budget.ts");
+    const { Deadline } = await import("../../src/internal/time.ts");
+    const { createEngineSession } = await import("../../src/engine/session.ts");
+    const { sessionSecrecy } = await import("../../src/run/secrecy.ts");
+    const { createFakeEngine } = await import("../helpers/fake-engine.ts");
+    const tree = { ref: { id: "s", revision: "" }, role: "status", name: "before replay" };
+    const fake = createFakeEngine({ tree });
+    const target = createEngineSession({ engine: fake.engine, targetName: "synthetic" });
+    const checkpoints = new DebugCheckpoints({
+      policy: { retain: "on" }, session: target, secrecy: sessionSecrecy(target, new Map()),
+      budget: new AttemptBudget(new AbortController().signal, new Deadline(10_000)),
+      artifacts: { dir: "/unused", register: () => "unused", link: () => "unused" },
+      runId: "run", attemptId: "attempt", maxObservationBytes: 65536, appOrigin: undefined, onDeadline: () => undefined,
+    });
+    const steps = new StepRecorder("attempt", { boundary: (step, body) => checkpoints.run(step, body) });
+    const cache = entryContext({ endPath: "/customers" });
+    const replay = makeSession(cache, {
+      ...makeHost(["/pricing", "/customers"]),
+      actions: { navigate: async () => { tree.name = "after replay"; } } as unknown as ExecutorActions,
+    });
+    const verdict = await steps.run("agent", "agent.act", "open customers", async () => {
+      const result = await replay.begin();
+      expect(replay.cacheInfo?.mode).toBe("self-finalized");
+      steps.attachAgentDetails({ cache: replay.cacheInfo! });
+      return result;
+    });
+    expect(verdict?.status).toBe("passed");
+    expect(steps.all()[0]?.cache?.mode).toBe("self-finalized");
+    expect(checkpoints.all().map(({ semantics }) => semantics.status === "available" ? semantics.text : "missing")).toEqual([
+      expect.stringContaining("before replay"), expect.stringContaining("after replay"),
+    ]);
+    expect(checkpoints.all()).toHaveLength(2);
+    expect(steps.all()[0]?.events.filter(({ kind }) => kind === "model")).toHaveLength(0);
+    expect(cache.staged).toHaveLength(0);
+  });
+});

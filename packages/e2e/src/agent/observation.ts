@@ -21,6 +21,19 @@ const UNAVAILABLE_TREE_MARKER = '[semantic capture unavailable: no nodes were re
 /** Why pixels the caller asked for are not part of this observation. */
 type PixelsWithheld = 'MASKING_UNPROVEN';
 
+/** Private formatter positions, never attached to an observation or public checkpoint. */
+interface FormattedField {
+  readonly start: number;
+  readonly end: number;
+  /** End of encoded content, before closing quotes and formatter-added ellipses. */
+  readonly contentEnd: number;
+  readonly quoted: boolean;
+  readonly cut: boolean;
+}
+
+type CutField = 'name' | 'text' | 'value' | 'selection';
+type FieldEmitter = (field: FormattedField, key?: CutField) => void;
+
 export type AgentObservation = AgentObservationMetadata & (
   | {
       readonly kind: 'semantic';
@@ -71,6 +84,10 @@ export function prepareObservation(
     /** `redact` for a field cut at its observed limit (`SecretLedger.redactCut`). */
     redactCut: (text: string) => string;
     maxBytes: number;
+    /** Opt-in private scalar provenance for bounded checkpoint re-redaction. */
+    onField?: (field: FormattedField) => void;
+    /** Checkpoint-only projection: bounded historical scalars cannot prove selection dependencies. */
+    withholdSelections?: boolean;
     /** Grants pixel-only evidence; omit when this consumer cannot use it. */
     pixelsAllowed?: boolean;
     /** The app base URL's origin: link targets on it render as paths, which navigation resolves against it. */
@@ -116,9 +133,16 @@ export function prepareObservation(
   let bytes = 0;
   let cutByBudget = false;
 
-  const emit = (node: RedactedNode, depth: number): void => {
+  let textOffset = 0;
+  const emit = (node: RedactedNode, source: SemanticNode | undefined, depth: number): void => {
     if (cutByBudget) return;
-    const line = formatNode(node, depth, options.appOrigin);
+    const fields: FormattedField[] | undefined = options.onField === undefined ? undefined : [];
+    const line = formatNodeWithFields(node, depth, options.appOrigin, fields === undefined ? undefined : (field, key) => {
+      const limit = key === 'name' ? OBSERVED_NAME_LIMIT : OBSERVED_TEXT_LIMIT;
+      // One extra offset lets the checkpoint owner detect overflow and withhold;
+      // even a malformed node with thousands of state keys cannot grow this buffer.
+      if (fields.length < 2049) fields.push({ ...field, cut: field.cut || (key !== undefined && source?.[key]?.length === limit) });
+    }, options.withholdSelections === true);
     const size = encoder.encode(`${line}\n`).byteLength;
     if (lines.length > 0 && bytes + size > budget) {
       cutByBudget = true;
@@ -126,9 +150,13 @@ export function prepareObservation(
     }
     bytes += size;
     lines.push(line);
-    for (const child of node.children ?? []) emit(child, depth + 1);
+    for (const field of fields ?? []) options.onField?.({
+      ...field, start: textOffset + field.start, end: textOffset + field.end, contentEnd: textOffset + field.contentEnd,
+    });
+    textOffset += line.length + 1;
+    for (const [index, child] of (node.children ?? []).entries()) emit(child, source?.children?.[index], depth + 1);
   };
-  emit(tree, 0);
+  emit(tree, options.onField === undefined ? undefined : observation.tree, 0);
   const marker = markerFor(cutByBudget);
   if (marker !== undefined) lines.push(marker);
   const truncated = marker !== undefined;
@@ -419,8 +447,19 @@ const MAX_HREF_LENGTH = 256;
  * `appOrigin`, the app base URL's, renders as its path.
  */
 export function formatNode(node: RedactedNode, depth: number, appOrigin?: string): string {
-  const description = describeNode(node, appOrigin);
-  return `${' '.repeat(Math.min(depth, MAX_INDENT_DEPTH))}#${node.ref.id}${description === '' ? '' : ` ${description}`}`;
+  return formatNodeWithFields(node, depth, appOrigin);
+}
+
+/** Emits scalar positions at the same operation that writes them, without parsing opaque ids or roles. */
+function formatNodeWithFields(node: RedactedNode, depth: number, appOrigin: string | undefined, onField?: FieldEmitter, withholdSelections = false): string {
+  const indent = ' '.repeat(Math.min(depth, MAX_INDENT_DEPTH));
+  const prefix = `${indent}#${node.ref.id}`;
+  onField?.({ start: indent.length + 1, end: prefix.length, contentEnd: prefix.length, quoted: false, cut: false });
+  const description = describeNodeWithFields(node, appOrigin, new Set(), onField === undefined ? undefined : (field, key) => {
+    const offset = prefix.length + 1;
+    onField({ ...field, start: offset + field.start, end: offset + field.end, contentEnd: offset + field.contentEnd }, key);
+  }, withholdSelections);
+  return `${prefix}${description === '' ? '' : ` ${description}`}`;
 }
 
 /**
@@ -430,38 +469,63 @@ export function formatNode(node: RedactedNode, depth: number, appOrigin?: string
  * (focus moves with every action).
  */
 export function describeNode(node: RedactedNode, appOrigin?: string, ignoreStates: ReadonlySet<string> = new Set()): string {
+  return describeNodeWithFields(node, appOrigin, ignoreStates);
+}
+
+/** One serialization owner for ordinary model text and opt-in checkpoint provenance. */
+function describeNodeWithFields(node: RedactedNode, appOrigin: string | undefined, ignoreStates: ReadonlySet<string>, onField?: FieldEmitter, withholdSelections = false): string {
   const parts: string[] = [];
-  if (node.role !== undefined && node.role !== '') parts.push(node.role);
-  if (node.name !== undefined && node.name !== '') parts.push(JSON.stringify(node.name));
+  let length = 0;
+  const push = (part: string): void => {
+    length += (parts.length === 0 ? 0 : 1) + part.length;
+    parts.push(part);
+  };
+  const scalar = (value: string, quoted: boolean, prefix = '', key?: CutField, suffix = ''): void => {
+    const rendered = quoted ? JSON.stringify(value + suffix) : value + suffix;
+    const start = length + (parts.length === 0 ? 0 : 1) + prefix.length;
+    onField?.({ start, end: start + rendered.length, contentEnd: start + rendered.length - (quoted ? 1 : 0) - suffix.length, quoted, cut: suffix !== '' }, key);
+    push(prefix + rendered);
+  };
+  if (node.role !== undefined && node.role !== '') scalar(node.role, false);
+  if (node.name !== undefined && node.name !== '') scalar(node.name, true, '', 'name');
   const text = node.text === undefined ? '' : collapseText(node.text);
-  if (text !== '' && text !== node.name) parts.push(`text=${JSON.stringify(text)}`);
+  if (text !== '' && text !== node.name) scalar(text, true, 'text=', 'text');
   // Disambiguators the model needs when role and name repeat. The engine has
   // already reduced href to origin and path.
-  if (node.testId !== undefined && node.testId !== '') parts.push(`testid=${JSON.stringify(node.testId)}`);
+  if (node.testId !== undefined && node.testId !== '') scalar(node.testId, true, 'testid=');
   const href = node.attributes?.['href'];
-  if (href !== undefined && href !== '') parts.push(`href=${JSON.stringify(renderHref(href, appOrigin))}`);
-  const placeholder = node.attributes?.['placeholder'];
-  if (placeholder !== undefined && placeholder !== '' && (node.name ?? '') === '') {
-    parts.push(`placeholder=${JSON.stringify(placeholder)}`);
+  if (href !== undefined && href !== '') {
+    const target = onOrigin(href, appOrigin) ? href.slice(appOrigin.length) : href;
+    const rendered = boundHref(target);
+    const cut = target.length > MAX_HREF_LENGTH;
+    scalar(cut ? rendered.slice(0, -1) : rendered, true, 'href=', undefined, cut ? '…' : '');
   }
+  const placeholder = node.attributes?.['placeholder'];
+  if (placeholder !== undefined && placeholder !== '' && (node.name ?? '') === '') scalar(placeholder, true, 'placeholder=');
   if (node.states?.secure === true) {
-    parts.push('value=<secure>');
+    push('value=<secure>');
   } else if (node.value !== undefined && node.value !== '') {
-    parts.push(`value=${JSON.stringify(node.value)}`);
+    scalar(node.value, true, 'value=', 'value');
   }
   // What a Shift+Arrow press selected: without it the model extends a
   // selection blind and cannot tell one word from its neighbour. Rendered
   // verbatim (escaped), since a selected space or newline is a selection too.
-  if (node.selection !== undefined && node.selection !== '') {
-    parts.push(`selection=${JSON.stringify(node.selection)}`);
-  }
-  if (node.inputPurpose !== undefined && node.inputPurpose !== 'none') {
-    parts.push(`purpose=${node.inputPurpose}`);
-  }
+  // Historical checkpoints retain neither the node nor its full dependency fields.
+  // Omit selections before emission: even a short substring can reveal a later-resolved secret.
+  if (!withholdSelections && node.selection !== undefined && node.selection !== '') scalar(node.selection, true, 'selection=', 'selection');
+  if (node.inputPurpose !== undefined && node.inputPurpose !== 'none') scalar(node.inputPurpose, false, 'purpose=');
   const states = Object.entries(node.states ?? {})
     .filter(([key, value]) => value === true && !ignoreStates.has(key))
     .map(([key]) => key);
-  if (states.length > 0) parts.push(`[${states.join(' ')}]`);
+  if (states.length > 0) {
+    // State names normally come from a closed set, but their positions remain unambiguous too.
+    let start = length + (parts.length === 0 ? 0 : 1) + 1;
+    for (const state of states) {
+      onField?.({ start, end: start + state.length, contentEnd: start + state.length, quoted: false, cut: false });
+      start += state.length + 1;
+    }
+    push('[' + states.join(' ') + ']');
+  }
   return parts.join(' ');
 }
 

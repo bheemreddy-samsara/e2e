@@ -1,0 +1,26 @@
+{
+  "format": "debug-checkpoint-1",
+  "id": "attempt:0:checkpoint:after",
+  "attemptId": "attempt",
+  "stepId": "attempt:0",
+  "stepIndex": 0,
+  "phase": "after",
+  "attemptedAt": "2026-10-01T00:00:00.000Z",
+  "capturedAt": "2026-10-01T00:00:00.002Z",
+  "observationId": "attempt:b2",
+  "viewport": {
+    "width": 800,
+    "height": 600,
+    "scale": 1
+  },
+  "semantics": {
+    "status": "available",
+    "text": "#n1 textbox value=<secure>",
+    "truncated": false
+  },
+  "image": {
+    "status": "withheld",
+    "reason": "PIXEL_TAINTED"
+  },
+  "artifactId": "attempt:artifact:0"
+}

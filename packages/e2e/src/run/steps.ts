@@ -300,6 +300,8 @@ export interface StepRecorderOptions {
   readonly redact?: (text: string) => string;
   /** Cuts every running step when it aborts: the step fails with the signal's error and its body is abandoned. */
   readonly signal?: AbortSignal;
+  /** SDK-owned awaited boundary; absent unless debug checkpoints were requested. */
+  readonly boundary?: <T>(step: StepRecord, body: () => Promise<T>) => Promise<T>;
 }
 
 /** Frames kept when a step captures where it was called from; the user's line is a few frames up. */
@@ -378,6 +380,7 @@ export class StepRecorder {
   private readonly projectRoot: string | undefined;
   private readonly redact: ((text: string) => string) | undefined;
   private readonly signal: AbortSignal | undefined;
+  private readonly boundary: StepRecorderOptions["boundary"];
 
   constructor(
     private readonly attemptId: string,
@@ -389,6 +392,7 @@ export class StepRecorder {
     this.projectRoot = options.projectRoot;
     this.redact = options.redact;
     this.signal = options.signal;
+    this.boundary = options.boundary;
   }
 
   /** Replaces secret values in text the way every record is redacted; identity without a redactor. */
@@ -455,7 +459,7 @@ export class StepRecorder {
     const startedMs = Date.now();
     try {
       // Model calls made inside the body are attributed to this step.
-      const work = this.scope.run(record, () => withAiTraceStep(record.api, record.label, body));
+      const work = this.scope.run(record, () => withAiTraceStep(record.api, record.label, () => this.boundary === undefined ? body() : this.boundary(record, body)));
       const result = await (this.signal === undefined ? work : withAbort(work, this.signal, () => new TestError('CANCELLED', `${record.api} cancelled`)));
       if (this.abandoned.has(record.id)) return result;
       record.durationMs = Date.now() - startedMs;

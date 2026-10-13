@@ -198,6 +198,7 @@ loop. A retry opens a new session on the same worker host.
 | `signal` | none | Cancels opening or live fixture calls; the host signal also applies |
 | `agent` | the first configured agent | Agent the `agent` fixture uses when a call names none |
 | `onStep` | none | Live `StepProgress`, the same feed reporters receive |
+| `debugCheckpoints` | off | Awaited, bounded public-step observations; see below |
 
 `timeout`, `agent`, and `onStep` belong to the session, not `openHost`.
 Use `signal` to cancel provisioning or launch. `onStep` must not block or
@@ -212,6 +213,7 @@ An `end` event includes `status`, `durationMs`, `modelCalls`, and a redacted
 | `fixtures` | `agent`, `app`, `screen`, `platform`, and the engine's fixtures, typed as `TestFixtures & Fixtures` |
 | `runId`, `attemptId`, `target` | Host run and target, plus a unique attempt id |
 | `steps()` | Read-only `StepRecord`s for steps run so far, as the [report](/reference/reporters) records them |
+| `checkpoints()` | Read-only copies of bounded `DebugCheckpoint` evidence; artifacts finalize at close |
 | `artifactsDir` | Absolute directory for this attempt's screenshots, recordings, and trace |
 | `tracePath` | Absolute string path to `trace.md`; attach or read it after `close()` settles |
 | `close()` | Cancels remaining operations, ends the attempt, and writes its trace. Returns soft expectation and cleanup failures as `Promise<readonly SerializedError[]>` instead of throwing them |
@@ -256,3 +258,157 @@ passed to e2e.
 The one-shot attempt used by `e2e mcp` remains internal. There is no
 top-level `openSession` export.
 </Note>
+
+
+## Debug checkpoints
+
+Use `debugCheckpoints` on `host.openSession` for evidence captured at the
+operation boundary. Do not take screenshots asynchronously from `onStep`.
+That progress callback does not wait and can see a later screen.
+
+```ts
+const session = await host.openSession({
+  name: "checkout",
+  debugCheckpoints: { pixels: true, retain: "on", maxSteps: 20 },
+});
+try {
+  await session.fixtures.app.open();
+  await session.fixtures.screen.getByRole("button", "Buy").click();
+} finally {
+  const failures = await session.close();
+  const checkpoints = session.checkpoints();
+  // Match checkpoint.stepId to session.steps()[checkpoint.stepIndex].id.
+  // Retained images and JSON are attached through that step.artifacts list.
+}
+```
+
+`DebugCheckpointPolicy` and `DebugCheckpoint` are types on `e2e/runner`.
+Enumerable policy options are copied and validated before asynchronous attempt
+opening. Later caller mutations do not change that attempt. Policy getters are
+read into owned data once; this does not evaluate configured secret providers.
+Omitting the policy adds no observations, pixels, or model work. Enabling
+it does not enable model vision, change model metrics, or open another
+engine session. Capture errors degrade evidence, not the operation.
+Session cancellation and the session deadline still stop the operation.
+
+### Coverage and cost
+
+Each selected top-level recorded public step attempts capture before its body
+and after it settles, including a failed body. Privacy, cancellation, deadlines,
+and quotas can omit observation and record a missing-evidence reason instead.
+When attempted, observation is fresh and atomic; capture is awaited before the
+next top-level call starts. With this policy, concurrent
+top-level calls serialize in call order. Nested fixture calls, inner agent
+actions, and assertion polls get no separate checkpoints. An `agent.act`
+checkpoint describes the entire public call, not each action it performs.
+Calls that fail validation before opening a recorded step have no checkpoint.
+
+The boundary does not depend on an executor or cache decision. A replayed
+public step selects the same boundaries, not one per replayed action. Hosted sessions
+currently do not enable the runner trace cache; this option does not add
+hosted caching. CLI runs and MCP sessions do not accept this policy yet.
+
+These are boundary snapshots, not stability waits. An app can still be
+transitioning when its operation returns. A previous capture cannot prove
+that the app has not moved since, so this implementation takes fresh looks
+through the existing observation redaction and masking pipeline when capture
+is permitted, instead of reusing a potentially stale screen. Omitted captures
+make no observation or unused provider calls.
+
+| Policy | Default | Bound |
+| --- | --- | --- |
+| `pixels` | `false` | Requests proven-masked debug pixels only |
+| `maxSteps` | `50` | Positive integer, at most `100`; later steps get no checkpoints |
+| `maxBytes` | `8388608` | Positive integer, at most `16777216`; total semantic UTF-8 text and image bytes |
+| `captureTimeout` | `1000` | Positive integer in milliseconds, at most `5000`; also capped by the session deadline |
+| `retain` | `retain-on-failure` | `on` keeps every attempt; otherwise only non-passing e2e attempts keep evidence |
+
+At most two captures per selected step add up to twice `captureTimeout` to
+a call, charged to its session budget. A semantic snapshot is capped at
+64 KiB and the config observation limit; one image is capped at 1 MiB.
+After the byte quota runs out, later selected boundaries record
+`EVIDENCE_LIMIT` without observing. At most 100 selected steps produce 200
+checkpoint records (before and after). Separately, each capture retains at most
+2048 private scalar positions for late redaction;
+exceeding that bound withholds evidence with `EVIDENCE_LIMIT`.
+JSON escaping and metadata are outside the retained content-byte quota; it
+does not bound engine peak memory. Pixels are not requested with fewer than
+eight remaining bytes, insufficient even for a PNG signature. Exact compressed
+size is unknown before capture; larger requests can still exceed the remaining
+quota and report `EVIDENCE_LIMIT` without retaining the image.
+
+### Evidence and retention
+
+Every checkpoint carries stable `id`, `attemptId`, `stepId`, `stepIndex`,
+`phase`, and `attemptedAt`. Captures with a valid viewport also carry
+`observationId`, `capturedAt`, and a capture-time copy of `viewport`. Only
+finite, positive dimensions are included; unsupported optional scale values
+are omitted. If required dimensions are invalid, the viewport and its
+associated observation metadata are omitted together. Semantic evidence is
+redacted text with an explicit `truncated` flag, never raw XML, selectors, or an engine tree.
+Checkpoint text omits every node's `selection` before formatting, including
+public selections. A short selected substring can reveal a secret resolved
+later even when whole-value redaction masks its value or text. Bounded
+historical scalar positions cannot prove those dependencies after field
+elision, cuts, or quota loss, so checkpoints conservatively withhold selections
+without retaining more source fields. Ordinary model and executor observations
+keep their existing selection policy, even when checkpoints are enabled.
+This initial version does not expose selected-node highlights or action points.
+
+`image.status` is `pending` while permitted image bytes await retention.
+After close it is `available` with an `artifactId`, or an explicit missing
+reason. Withheld images name `NOT_REQUESTED`, `PIXEL_TAINTED`, or
+`MASKING_UNPROVEN`. Unavailable captures name `UNSUPPORTED_CAPABILITY`,
+`CAPTURE_UNAVAILABLE`, `CAPTURE_TIMEOUT`, `CANCELLED`, or `EVIDENCE_LIMIT`.
+Image persistence can also report `ARTIFACT_UNAVAILABLE`.
+
+Secret fills taint every subsequent checkpoint image for that session.
+No post-fill pixels are requested, even when the engine can mask secure
+fields. Close also withholds earlier images still awaiting retention if the
+session is now tainted. Missing capture metadata and changed capture-start ledger proof also withhold
+earlier images. Pixel proof starts before capture; it cannot be renewed
+retrospectively to authorize old bytes. The original private ticket binds the
+owned image copy at capture and final masked JSON before writing. Byte size,
+digest, and live privacy proof are checked before the first write and again
+after asynchronous artifact reads. Public metadata and ticket copies cannot
+supply or replace that receipt. Text passes through the live secret ledger again
+when read and before storage, after required cleanup, worker retirement, and any required recording finalization.
+Short prefixes are redacted at engine, link-formatting, and content-quota cuts,
+before ellipses or quotes are rendered. Field positions stay private and bounded;
+they are not part of checkpoint JSON. Redaction still
+precedes content clipping, so an expanded secret marker can itself be truncated.
+Checkpoint content needs a prospective privacy proof before capture or any first
+file/store write. An idle resolver queue and successful cleanup cannot prove
+that a configured provider will not begin during later recovery or disposal.
+When any effective secret or credential password uses an opaque provider,
+checkpoints permanently omit semantic text, pixels, and engine capture metadata
+with `CAPTURE_UNAVAILABLE`. This includes unused providers and providers that
+already returned a value. The SDK can call them fresh and get a different value.
+Only SDK-minted step boundary facts and fixed missing-evidence reasons remain;
+capture associations are explicitly null. These files contain only the nine
+SDK format, boundary, timestamp, and missing-evidence fields, rendered as compact
+JSON with at most one trailing newline. Extra fields, duplicate keys, arbitrary
+reason text, or mismatched boundary facts cannot be written or handed to a store.
+Environment overrides that replace a provider with a literal retain normal
+ledger redaction and available captures.
+
+Pending or failed actual secret handoffs and unproven required cleanup also
+withhold content. Late provider completion cannot restore dropped evidence.
+The check covers effective configured layers, registration, engine-derived values,
+and fill taint. It invokes no unused providers, adds no secret-resolution waits,
+and never disposes a reusable worker just for evidence. Ordinary model/executor
+observations and non-checkpoint lifecycle behavior are unchanged.
+Worker ownership lasts through artifact finalization.
+Never treat missing semantics as an empty screen.
+
+Evidence stays bounded in SDK memory until close. Retained JSON log and
+masked PNG artifacts land under `session.artifactsDir/debug/` and use the
+existing artifact store and step association. JSON follows the shipped
+`schema/debug-checkpoint-v1.schema.json`. The file omits its own artifact id;
+`checkpoints()` adds it after registration. No report-export API is added.
+Retention is decided after required recording finalization, using the same
+effective retention verdict when supplied by hosted closing. Passed and skipped
+effective outcomes discard failure-only checkpoints before writing or uploading.
+Without a hosted effective verdict, the SDK verdict remains the fallback. Existing video retention is unchanged. Your runner owns
+body errors; an error it never reports through an e2e step or soft assertion
+does not make the e2e session non-passing.

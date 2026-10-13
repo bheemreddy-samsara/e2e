@@ -14,7 +14,7 @@ import { ConfigurationError, errorMessage, InfrastructureError, TestError } from
 import { Deadline } from '../internal/time.ts';
 import { didYouMean } from '../internal/suggest.ts';
 import { createScreenshotContext, type WrittenScreenshots } from './screenshots.ts';
-import { resolveSecretValue, sessionSecrecy, type SecretExposure } from './secrecy.ts';
+import { resolveSecretValue, sessionSecrecy, trackSecretResolution, type SecretExposure } from './secrecy.ts';
 import { resolveNavigationUrl } from '../internal/urls.ts';
 import { FixtureRecorder } from './fixture-recording.ts';
 import type { AttemptBudget } from './budget.ts';
@@ -46,6 +46,10 @@ export interface ArtifactSink {
 
 /** Facts about a produced artifact its file does not carry. */
 export interface ArtifactRegistration {
+  /** Private SDK evidence marker; only an original capture ticket proves redaction. */
+  readonly debugEvidence?: boolean;
+  /** SDK-delayed evidence keeps the step that captured it, not the step active at registration. */
+  readonly stepId?: string;
   /** When a time-based artifact (a video segment) began recording. */
   readonly startedAt?: string;
 }
@@ -105,12 +109,14 @@ export function createFixtures(environment: AttemptEnvironment): AttemptFixtures
 
   const { ledger, exposure } = sessionSecrecy(environment.session, environment.config.allSecrets);
   const secrets: SecretResolver = {
-    async resolve(secret) {
-      const plaintext = await resolveSecretValue(secret, environment.config.allSecrets, ledger);
-      // Only a value that exists can reach the screen: a failed provider
-      // leaves nothing to taint the viewport with.
-      exposure.raise('filled');
-      return plaintext;
+    resolve(secret) {
+      return trackSecretResolution(ledger, async () => {
+        const plaintext = await resolveSecretValue(secret, environment.config.allSecrets, ledger);
+        // Only a value that exists can reach the screen: a failed provider
+        // leaves nothing to taint the viewport with.
+        exposure.raise('filled');
+        return plaintext;
+      });
     },
   };
 

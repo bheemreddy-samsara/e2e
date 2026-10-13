@@ -1,0 +1,225 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://e2e.tester.army/schema/debug-checkpoint-v1.schema.json",
+  "title": "SDK-owned public-step debug checkpoint",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "format",
+    "id",
+    "attemptId",
+    "stepId",
+    "stepIndex",
+    "phase",
+    "attemptedAt",
+    "semantics",
+    "image"
+  ],
+  "properties": {
+    "format": {
+      "const": "debug-checkpoint-1"
+    },
+    "id": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 200
+    },
+    "attemptId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 100
+    },
+    "stepId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 150
+    },
+    "stepIndex": {
+      "type": "integer",
+      "minimum": 0
+    },
+    "phase": {
+      "enum": [
+        "before",
+        "after"
+      ]
+    },
+    "attemptedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "capturedAt": {
+      "type": "string",
+      "format": "date-time"
+    },
+    "observationId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 150
+    },
+    "artifactId": {
+      "type": "string",
+      "minLength": 1,
+      "maxLength": 150
+    },
+    "viewport": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "width",
+        "height"
+      ],
+      "properties": {
+        "width": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "height": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        },
+        "scale": {
+          "type": "number",
+          "exclusiveMinimum": 0
+        }
+      }
+    },
+    "semantics": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "text",
+            "truncated"
+          ],
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "text": {
+              "type": "string",
+              "maxLength": 65536
+            },
+            "truncated": {
+              "type": "boolean"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "UNSUPPORTED_CAPABILITY",
+                "CAPTURE_UNAVAILABLE",
+                "CAPTURE_TIMEOUT",
+                "CANCELLED",
+                "EVIDENCE_LIMIT"
+              ]
+            }
+          }
+        }
+      ]
+    },
+    "image": {
+      "oneOf": [
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status"
+          ],
+          "properties": {
+            "status": {
+              "const": "pending"
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "artifactId"
+          ],
+          "properties": {
+            "status": {
+              "const": "available"
+            },
+            "artifactId": {
+              "type": "string",
+              "minLength": 1,
+              "maxLength": 150
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "withheld"
+            },
+            "reason": {
+              "enum": [
+                "NOT_REQUESTED",
+                "PIXEL_TAINTED",
+                "MASKING_UNPROVEN"
+              ]
+            }
+          }
+        },
+        {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "status",
+            "reason"
+          ],
+          "properties": {
+            "status": {
+              "const": "unavailable"
+            },
+            "reason": {
+              "enum": [
+                "UNSUPPORTED_CAPABILITY",
+                "CAPTURE_UNAVAILABLE",
+                "CAPTURE_TIMEOUT",
+                "CANCELLED",
+                "EVIDENCE_LIMIT",
+                "ARTIFACT_UNAVAILABLE"
+              ]
+            }
+          }
+        }
+      ]
+    }
+  },
+  "dependentRequired": {
+    "viewport": [
+      "observationId",
+      "capturedAt"
+    ],
+    "observationId": [
+      "capturedAt",
+      "viewport"
+    ],
+    "capturedAt": [
+      "observationId"
+    ]
+  }
+}

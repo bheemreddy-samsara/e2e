@@ -14,6 +14,7 @@ import { resultId, timestamp, uuidv7 } from '../internal/ids.ts';
 import { Deadline, withTimeout } from '../internal/time.ts';
 import { attemptVideo } from '../internal/recording-modes.ts';
 import type { TestFixtures } from '../types.ts';
+import { DebugCheckpoints, validateDebugCheckpoints, type DebugCheckpoint, type DebugCheckpointPolicy } from "./debug-checkpoints.ts";
 import { createAttemptArtifacts, resultSegment } from './artifacts.ts';
 import { AttemptBudget } from './budget.ts';
 import { classifyAttemptStatus, type ClosingRecord, type TargetExecutor } from './execute.ts';
@@ -22,7 +23,7 @@ import { writeHostTrace } from './host-trace.ts';
 import type { AttemptRecord } from './records.ts';
 import { holdSecretRegistry } from '../secrets.ts';
 import { processSecrets, redactForSession, sessionSecrecy } from './secrecy.ts';
-import { StepRecorder, type StepProgress } from './steps.ts';
+import { StepRecorder, type StepProgress, type StepRecord } from './steps.ts';
 import { WorkerModels } from './worker-models.ts';
 
 /**
@@ -39,6 +40,7 @@ export interface StandaloneSessionOptions {
   readonly timeoutMs: number;
   readonly agent?: string | undefined;
   readonly onProgress?: (progress: StepProgress) => void;
+  readonly debugCheckpoints?: DebugCheckpointPolicy;
   /** The test title of a hosted attempt; ignored by a one-shot attempt. */
   readonly name?: string;
 }
@@ -53,6 +55,7 @@ export interface StandaloneAttempt {
   readonly budget: AttemptBudget;
   readonly artifactsDir: string;
   readonly tracePath: string;
+  checkpoints(): readonly DebugCheckpoint[];
   close(): Promise<readonly SerializedError[]>;
 }
 
@@ -96,11 +99,13 @@ const MAX_TIMER_MS = 2 ** 31 - 1;
  * Validates the options and publishes a hosted attempt, synchronously, so
  * `expect` finds it before launch and no second attempt can publish over it.
  */
-export function reserveAttempt(worker: AttemptWorker, options: StandaloneSessionOptions): AttemptReservation {
-  if (worker.signal.aborted || options.signal.aborted) throw new InfrastructureError('CANCELLED', 'opening the e2e session was cancelled');
-  if (!Number.isFinite(options.timeoutMs) || options.timeoutMs <= 0) {
+export function reserveAttempt(worker: AttemptWorker, input: StandaloneSessionOptions): AttemptReservation {
+  if (worker.signal.aborted || input.signal.aborted) throw new InfrastructureError('CANCELLED', 'opening the e2e session was cancelled');
+  if (!Number.isFinite(input.timeoutMs) || input.timeoutMs <= 0) {
     throw new ConfigurationError('INVALID_CONFIG', 'session timeout must be a positive, finite number of milliseconds');
   }
+  const debugCheckpoints = validateDebugCheckpoints(input.debugCheckpoints);
+  const options = { ...input, ...(debugCheckpoints === undefined ? {} : { debugCheckpoints }) };
   const attemptId = uuidv7();
   const end = new AbortController();
   const signal = AbortSignal.any([worker.signal, options.signal, end.signal]);
@@ -119,12 +124,14 @@ export function reserveAttempt(worker: AttemptWorker, options: StandaloneSession
 /**
  * Launches the reserved attempt and hands back its fixtures. A launch that
  * fails has already ended what it opened, the same as a run's retry relies
- * on; the worker stays usable. `onClosed` runs once when `close` settles,
- * before `close` returns, so the host can retire a worker whose cleanup failed.
+ * on; the worker stays usable. Required retirement precedes checkpoint
+ * publication, without making the worker idle or releasing ownership.
+ * The final notification runs only after all finalization has settled.
  */
 export async function launchAttempt(
   worker: AttemptWorker,
   reservation: AttemptReservation,
+  onRetiring: (closed: AttemptClosed) => Promise<boolean>,
   onClosed: (closed: AttemptClosed) => Promise<void>,
 ): Promise<StandaloneAttempt> {
   const { config, target, executor, runId } = worker;
@@ -134,9 +141,11 @@ export async function launchAttempt(
   const redact = (text: string): string => redactForSession(session, config.allSecrets, text);
   const agent = options.agent ?? config.agentNames[0] ?? '';
   const identity = attemptIdentity(worker, attemptId, agent, redact(options.name ?? target.name));
+  let checkpoints: DebugCheckpoints | undefined;
   const steps = new StepRecorder(attemptId, {
     maxEventsPerStep: config.limits.maxEventsPerStep, projectRoot: config.projectRoot, redact, signal: attemptSignal,
     ...(options.onProgress === undefined ? {} : { onProgress: options.onProgress }),
+    ...(options.debugCheckpoints === undefined ? {} : { boundary: <T>(step: StepRecord, body: () => Promise<T>) => checkpoints === undefined ? body() : checkpoints.run(step, body) }),
   });
   const artifacts = createAttemptArtifacts({
     artifactsRoot: worker.resultsDir, segments: identity.segments, attemptId, currentStepId: () => steps.currentStepId,
@@ -167,6 +176,11 @@ export async function launchAttempt(
   opened.appLog.route((event, at) => steps.recordAppEvent(event, at));
   // Launch was the worker's work; the test's deadline starts once its fixtures exist.
   budget.enter(attemptSignal, options.timeoutMs);
+  if (options.debugCheckpoints !== undefined) checkpoints = new DebugCheckpoints({
+    policy: options.debugCheckpoints, session: opened, secrecy: sessionSecrecy(opened, config.allSecrets),
+    onDeadline: (error) => { recordFailure(error, "body"); end.abort(error); },
+    budget, artifacts: artifacts.sink, runId, attemptId, maxObservationBytes: config.limits.maxObservationBytes, appOrigin: target.app.base?.origin,
+  });
   const attempt: ExecutorAttempt = { testId: identity.testId, attemptId, index: 0, signal: end.signal, memory: new Map<string, unknown>() };
   let acquired: ReturnType<typeof createFixtures>;
   try {
@@ -186,6 +200,7 @@ export async function launchAttempt(
   // failure first; whatever is still in flight then fails as timed out.
   const remaining = budget.deadline.remaining() + 1;
   const expiry = remaining > MAX_TIMER_MS ? undefined : setTimeout(() => {
+    if (checkpoints !== undefined && end.signal.aborted) return;
     const timedOut = new TestTimeoutError(`session timed out after ${options.timeoutMs} ms`);
     recordFailure(timedOut, 'body');
     end.abort(timedOut);
@@ -213,6 +228,21 @@ export async function launchAttempt(
       try {
         await closeOpened(record);
       } catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; }
+      let retirementProven = true;
+      if (checkpoints !== undefined) {
+        try { retirementProven = await onRetiring({ cleanup: record.cleanup }); }
+        catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; retirementProven = false; }
+      }
+      if (checkpoints !== undefined && record.finalizeVideo !== undefined) {
+        // Combined hosted closing installs this hook; standalone checkpoints never start video work.
+        try { await record.finalizeVideo(); }
+        catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; retirementProven = false; }
+        try { retirementProven = await onRetiring({ cleanup: record.cleanup }) && retirementProven; }
+        catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; retirementProven = false; }
+      }
+      // Timed-out cleanup may still start a provider later; an empty ledger queue alone proves nothing then.
+      const cleanupProven = retirementProven && !attemptErrors.some((error) => error.code === 'CLEANUP_TIMEOUT');
+      try { await checkpoints?.finish(verdict().status !== "passed", cleanupProven, record); } catch { /* Debug evidence is best-effort. */ }
       try { await artifacts.settle(); } catch (cause) { recordFailure(cause, 'cleanup'); }
       if (worker.kind === 'hosted') {
         try {
@@ -240,7 +270,7 @@ export async function launchAttempt(
   };
   return {
     runId, attemptId, fixtures: acquired.fixtures, agentRuntime: acquired.agentRuntime, session: opened, steps, budget,
-    artifactsDir: artifacts.dir, tracePath, close,
+    artifactsDir: artifacts.dir, tracePath, checkpoints: () => checkpoints?.all() ?? [], close,
   };
 }
 

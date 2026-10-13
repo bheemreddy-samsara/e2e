@@ -109,6 +109,76 @@ export function registerStaticSecrets(secrets: ResolvedConfig['allSecrets']): vo
   }
 }
 
+/** Private resolution accounting shared by capture and export; no provider registry or plaintext. */
+const resolutionsByLedger = new WeakMap<SecretLedger, {
+  pending: Set<Promise<void>>;
+  failed: boolean;
+  configured: boolean;
+  opaque: boolean;
+}>();
+
+/** One canonical accounting state for effective configuration and actual handoffs, without provider calls. */
+function resolutions(ledger: SecretLedger) {
+  let state = resolutionsByLedger.get(ledger);
+  if (state === undefined) {
+    state = { pending: new Set(), failed: false, configured: false, opaque: false };
+    resolutionsByLedger.set(ledger, state);
+  }
+  return state;
+}
+
+/** Records effective configured values without invoking providers or accessor-backed lazy references. */
+function configureSecretResolutions(ledger: SecretLedger, secrets: ResolvedConfig['allSecrets']): void {
+  const state = resolutions(ledger);
+  state.configured = true;
+  for (const [name, secret] of secrets) {
+    const value = Object.getOwnPropertyDescriptor(secret, 'value');
+    // A function can return a new value on every SDK call, even after a successful resolution.
+    if (value === undefined || !('value' in value) || typeof value.value !== 'string') state.opaque = true;
+    else {
+      // Borrowed sessions may acquire another effective static configuration layer.
+      ledger.register(name, value.value);
+      processSecrets.register(name, value.value);
+    }
+  }
+}
+
+/**
+ * Prospective content proof for first publication, not just the current pending queue.
+ * Every effective configured layer must be registered through sessionSecrecy. Opaque
+ * providers or lazy values permanently deny proof; no closed-world provider contract
+ * exists. Missing configuration accounting also denies proof. Static/env values keep
+ * their normal ledger redaction. The sdk-facts case permits only fixed protocol reasons
+ * and SDK-minted boundary facts, never prose, pixels or engine capture metadata; those
+ * facts do not depend on a provider value. This never invokes a provider, waits or resets state.
+ */
+export function prospectiveSecretResolutionsProven(ledger: SecretLedger, evidence: 'content' | 'sdk-facts' = 'content'): boolean {
+  const state = resolutionsByLedger.get(ledger);
+  return state?.configured === true && (evidence === 'sdk-facts' || !state.opaque && secretResolutionsProven(ledger));
+}
+
+/** Tracks the entire handoff, including engine-derived registration and fill taint. */
+export async function trackSecretResolution<T>(ledger: SecretLedger, resolve: () => Promise<T>): Promise<T> {
+  const state = resolutions(ledger);
+  let finish!: () => void;
+  const pending = new Promise<void>((done) => { finish = done; });
+  state.pending.add(pending);
+  try { return await resolve(); }
+  catch (cause) { state.failed = true; throw cause; }
+  finally { state.pending.delete(pending); finish(); }
+}
+
+/** Whether an actual runner-owned handoff is still in flight, without waiting. */
+export function hasPendingSecretResolutions(ledger: SecretLedger): boolean {
+  return (resolutionsByLedger.get(ledger)?.pending.size ?? 0) > 0;
+}
+
+/** A failed or still-running resolver cannot prove that every value reached the ledger. */
+export function secretResolutionsProven(ledger: SecretLedger): boolean {
+  const state = resolutionsByLedger.get(ledger);
+  return !hasPendingSecretResolutions(ledger) && state?.failed !== true;
+}
+
 /**
  * The plaintext of one configured secret, a provider's value computed fresh.
  * The value joins `ledger` and `processSecrets` before it is returned, so it
@@ -119,21 +189,24 @@ export async function resolveSecretValue(
   secrets: ResolvedConfig['allSecrets'],
   ledger: SecretLedger,
 ): Promise<string> {
+  configureSecretResolutions(ledger, secrets);
   const registered = secrets.get(secret.name);
   if (registered === undefined) {
     throw new ConfigurationError(unavailableCode(secret), `secret "${secret.name}" is not configured`);
   }
-  const value = registered.value;
-  const plaintext = typeof value === 'function' ? await value() : value;
-  if (typeof plaintext !== 'string' || secretLength(plaintext) < MIN_SECRET_LENGTH) {
-    throw new ConfigurationError(
-      unavailableCode(secret),
-      `secret "${secret.name}" provider did not return a string of at least ${MIN_SECRET_LENGTH} characters (code points)`,
-    );
-  }
-  ledger.register(secret.name, plaintext);
-  processSecrets.register(secret.name, plaintext);
-  return plaintext;
+  return trackSecretResolution(ledger, async () => {
+    const value = registered.value;
+    const plaintext = typeof value === 'function' ? await value() : value;
+    if (typeof plaintext !== 'string' || secretLength(plaintext) < MIN_SECRET_LENGTH) {
+      throw new ConfigurationError(
+        unavailableCode(secret),
+        `secret "${secret.name}" provider did not return a string of at least ${MIN_SECRET_LENGTH} characters (code points)`,
+      );
+    }
+    ledger.register(secret.name, plaintext);
+    processSecrets.register(secret.name, plaintext);
+    return plaintext;
+  });
 }
 
 /**
@@ -173,6 +246,7 @@ export function sessionSecrecy(
     };
     secrecyBySession.set(session, secrecy);
   }
+  configureSecretResolutions(secrecy.ledger, secrets);
   return secrecy;
 }
 

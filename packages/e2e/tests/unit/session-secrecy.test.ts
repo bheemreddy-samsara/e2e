@@ -1,8 +1,9 @@
 import { describe, expect, it } from 'vitest';
+import { secretHandle } from '../../src/secrets.ts';
 import type { ResolvedConfig } from '../../src/config/resolve.ts';
 import type { TargetSession } from '../../src/engine/surface.ts';
 import { serializeError, TestError } from '../../src/internal/errors.ts';
-import { adoptSecrecy, carriedSecrecy, processSecrets, redactForSession, registerStaticSecrets, redactsDownloads, sessionSecrecy, staticSecretLedger } from '../../src/run/secrecy.ts';
+import { adoptSecrecy, carriedSecrecy, hasPendingSecretResolutions, processSecrets, redactForSession, registerStaticSecrets, redactsDownloads, resolveSecretValue, sessionSecrecy, staticSecretLedger, trackSecretResolution } from '../../src/run/secrecy.ts';
 
 const STATIC_VALUE = 'static-config-password-5521';
 const PROVIDER_VALUE = 'provider-minted-token-8804';
@@ -85,5 +86,87 @@ describe('redaction before and after a session opens', () => {
     processSecrets.register('token', value);
     const serialized = serializeError(new TestError('ASSERTION_FAILED', `the app echoed ${value}`));
     expect(serialized.message).toBe('the app echoed <secret:token>');
+  });
+});
+
+/** Holds a provider or its post-registration handoff without a timer. */
+function deferred<T>() {
+  let resolve!: (value: T) => void;
+  const promise = new Promise<T>((done) => { resolve = done; });
+  return { promise, resolve };
+}
+
+describe('checkpoint ledger completeness', () => {
+  it('tracks concurrent providers until each value is registered, without resolving unused providers', async () => {
+    const first = deferred<string>();
+    const second = deferred<string>();
+    let unused = 0;
+    const configured: ResolvedConfig['allSecrets'] = new Map([
+      ['first', { name: 'first', purpose: 'generic-secret', value: () => first.promise }],
+      ['second', { name: 'second', purpose: 'generic-secret', value: () => second.promise }],
+      ['unused', { name: 'unused', purpose: 'generic-secret', value: () => { unused++; return 'unused-provider-value'; } }],
+    ]);
+    const { ledger } = sessionSecrecy(newSession(), configured);
+    const a = resolveSecretValue(secretHandle({ name: 'first', purpose: 'generic-secret' }), configured, ledger);
+    const b = resolveSecretValue(secretHandle({ name: 'second', purpose: 'generic-secret' }), configured, ledger);
+    expect(hasPendingSecretResolutions(ledger)).toBe(true);
+    first.resolve('first-provider-value');
+    await a;
+    expect(ledger.redact('first-provider-value')).toBe('<secret:first>');
+    expect(hasPendingSecretResolutions(ledger)).toBe(true);
+    second.resolve('second-provider-value');
+    await b;
+    expect(ledger.redact('second-provider-value')).toBe('<secret:second>');
+    expect(hasPendingSecretResolutions(ledger)).toBe(false);
+    expect(unused).toBe(0);
+  });
+
+  it('keeps a resolution pending through the engine-derived or fill-taint handoff', async () => {
+    const { ledger, exposure } = sessionSecrecy(newSession(), secrets);
+    const handoff = deferred<void>();
+    const registered = deferred<void>();
+    const resolving = trackSecretResolution(ledger, async () => {
+      const value = await resolveSecretValue(secretHandle({ name: 'token', purpose: 'generic-secret' }), secrets, ledger);
+      registered.resolve();
+      await handoff.promise;
+      ledger.register('token', 'derived-' + value);
+      exposure.raise('filled');
+      return value;
+    });
+    await registered.promise;
+    expect(ledger.redact(PROVIDER_VALUE)).toBe('<secret:token>');
+    expect(hasPendingSecretResolutions(ledger)).toBe(true);
+    handoff.resolve();
+    await resolving;
+    expect(hasPendingSecretResolutions(ledger)).toBe(false);
+    expect(ledger.redact('derived-' + PROVIDER_VALUE)).toBe('<secret:token>');
+    expect(exposure.withholdsPixels).toBe(true);
+  });
+
+  it('clears a rejected resolution and keeps other session ledgers independent', async () => {
+    const { ledger } = sessionSecrecy(newSession(), secrets);
+    const other = sessionSecrecy(newSession(), secrets);
+    const provider = deferred<void>();
+    const resolving = trackSecretResolution(ledger, async () => {
+      await provider.promise;
+      throw new Error('provider unavailable');
+    });
+    expect(hasPendingSecretResolutions(ledger)).toBe(true);
+    expect(hasPendingSecretResolutions(other.ledger)).toBe(false);
+    provider.resolve();
+    await expect(resolving).rejects.toThrow('provider unavailable');
+    expect(hasPendingSecretResolutions(ledger)).toBe(false);
+  });
+
+  it('clears a synchronous provider failure without eagerly retrying it', async () => {
+    const { ledger } = sessionSecrecy(newSession(), secrets);
+    let calls = 0;
+    const resolving = trackSecretResolution(ledger, () => {
+      calls++;
+      throw new Error('synchronous failure');
+    });
+    await expect(resolving).rejects.toThrow('synchronous failure');
+    expect(hasPendingSecretResolutions(ledger)).toBe(false);
+    expect(calls).toBe(1);
   });
 });

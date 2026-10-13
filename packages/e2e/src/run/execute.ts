@@ -54,7 +54,7 @@ import { traceScreen } from './step-screens.ts';
 import { runWithRetries } from './retry.ts';
 import { runSerialUnit, type SerialAttemptRun, type SerialAttemptStart, type SerialHost, type SharedSerialSession } from './serial.ts';
 import { interruptedSkip, pairKey, pairResult, unstartedResult } from './units.ts';
-import { adoptSecrecy, carriedSecrecy, processSecrets, registerDerivedSecrets, redactForSession, resolveSecretValue, sessionSecrecy, staticSecretLedger } from './secrecy.ts';
+import { adoptSecrecy, carriedSecrecy, processSecrets, registerDerivedSecrets, redactForSession, resolveSecretValue, sessionSecrecy, staticSecretLedger, trackSecretResolution } from './secrecy.ts';
 import { isSecret } from '../secrets.ts';
 import { SessionStaging, SessionStore, targetIdentity, type SessionIdentity } from './sessions.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
@@ -143,6 +143,10 @@ type AttemptPhase = 'launch' | 'beforeEach' | 'body' | 'afterEach';
  * reports.
  */
 export interface ClosingRecord {
+  /** Private hosted effective retention, evaluated after required finalization. */
+  readonly videoRetentionStatus?: () => AttemptRecord['status'];
+  /** Private recording finalization phase shared with hosted closing. */
+  finalizeVideo?: () => Promise<void>;
   readonly status: AttemptRecord['status'];
   cleanup: AttemptRecord['cleanup'];
 }
@@ -675,9 +679,11 @@ export class TargetExecutor implements SerialHost {
       );
     }
     const secrecy = sessionSecrecy(session, this.config.allSecrets);
-    const plaintext = await resolveSecretValue(secret, this.config.allSecrets, secrecy.ledger);
-    registerDerivedSecrets(secret.name, options?.derived?.(plaintext) ?? [], secrecy.ledger);
-    return plaintext;
+    return trackSecretResolution(secrecy.ledger, async () => {
+      const plaintext = await resolveSecretValue(secret, this.config.allSecrets, secrecy.ledger);
+      registerDerivedSecrets(secret.name, options?.derived?.(plaintext) ?? [], secrecy.ledger);
+      return plaintext;
+    });
   }
 
   /**

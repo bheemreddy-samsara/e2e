@@ -34,6 +34,29 @@ describe.each(schemas)('%s schema', (name) => {
     expect(validate(readJson('fixtures', `${name}.invalid.json`))).toBe(false);
   });
 
+  if (name === "debug-checkpoint-v1") {
+    it.each(["observationId", "capturedAt", "both"])("rejects viewport capture missing %s", (field) => {
+      const record = readJson("fixtures", "debug-checkpoint-v1.valid.json") as Record<string, unknown>;
+      if (field !== "capturedAt") delete record["observationId"];
+      if (field !== "observationId") delete record["capturedAt"];
+      expect(validate(record)).toBe(false);
+    });
+    it("accepts SDK-only missing facts without requiring a capture", () => {
+      const record = readJson("fixtures", "debug-checkpoint-v1.valid.json") as Record<string, unknown>;
+      delete record["observationId"]; delete record["capturedAt"]; delete record["viewport"];
+      record["semantics"] = { status: "unavailable", reason: "CAPTURE_UNAVAILABLE" };
+      record["image"] = { status: "unavailable", reason: "CAPTURE_UNAVAILABLE" };
+      expect(validate(record)).toBe(true);
+      record["observationId"] = null;
+      expect(validate(record)).toBe(false);
+    });
+    it("still rejects raw image payloads", () => {
+      const record = readJson("fixtures", "debug-checkpoint-v1.valid.json") as Record<string, unknown>;
+      record["image"] = { status: "available", data: "unmasked-base64" };
+      expect(validate(record)).toBe(false);
+    });
+  }
+
   if (name === 'report-v1') {
     it("bounds what a step tells and what the app logged: a log line's source and level, a hook phase, and the cache detail, entry, and write", () => {
       const report = readJson('fixtures', 'report-v1.valid.json') as {

@@ -8,6 +8,7 @@ import { allocateTargetPorts } from './app-ports.ts';
 import { processSecrets, registerStaticSecrets } from './secrecy.ts';
 import { selectTarget } from './select-target.ts';
 import { openStandaloneHost } from './standalone.ts';
+import type { DebugCheckpoint, DebugCheckpointPolicy } from "./debug-checkpoints.ts";
 import type { StepProgress, StepRecord } from './steps.ts';
 
 export interface OpenHostOptions {
@@ -39,6 +40,8 @@ export interface OpenSessionOptions {
   readonly agent?: string | undefined;
   /** The same step progress feed reporters receive. Must not block or throw. */
   readonly onStep?: ((progress: StepProgress) => void) | undefined;
+  /** Awaited public-step evidence, independent of model vision; off when omitted. */
+  readonly debugCheckpoints?: DebugCheckpointPolicy | undefined;
 }
 
 export interface E2EHost<Fixtures extends object = Record<string, unknown>> extends AsyncDisposable {
@@ -59,6 +62,8 @@ export interface E2ESession<Fixtures extends object = Record<string, unknown>> e
   /** Absolute per-session trace path. Written before close settles successfully. */
   readonly tracePath: string;
   steps(): readonly StepRecord[];
+  /** Bounded public-step evidence; retained artifacts are registered at close. */
+  checkpoints(): readonly DebugCheckpoint[];
   /** Idempotent. Returns soft assertion, abandoned-operation, and cleanup failures. Disposal throws them as AggregateError. */
   close(): Promise<readonly SerializedError[]>;
 }
@@ -87,18 +92,20 @@ async function openHostWorker<Fixtures extends object>(options: OpenHostOptions)
     [Symbol.asyncDispose]: () => dispose(host.close, 'host'),
     openSession: (sessionOptions) => redactOpening(async () => {
       if (typeof sessionOptions.name !== 'string') throw new ConfigurationError('INVALID_CONFIG', 'a hosted session requires a string name');
+      const debugCheckpoints = sessionOptions.debugCheckpoints;
       const attempt = await host.openAttempt({
         name: sessionOptions.name,
         signal: sessionOptions.signal ?? new AbortController().signal,
         timeoutMs: sessionOptions.timeout ?? config.timeout,
         agent: sessionOptions.agent,
+        ...(debugCheckpoints === undefined ? {} : { debugCheckpoints }),
         ...(sessionOptions.onStep === undefined ? {} : { onProgress: sessionOptions.onStep }),
       });
       return {
         runId: attempt.runId, attemptId: attempt.attemptId, target: target.name,
         fixtures: attempt.fixtures as TestFixtures & Fixtures,
         artifactsDir: attempt.artifactsDir, tracePath: attempt.tracePath,
-        steps: () => attempt.steps.all(), close: attempt.close,
+        steps: () => attempt.steps.all(), checkpoints: attempt.checkpoints, close: attempt.close,
         [Symbol.asyncDispose]: () => dispose(attempt.close, 'session'),
       };
     }),
