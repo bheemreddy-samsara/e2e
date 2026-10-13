@@ -20,10 +20,12 @@ import type { StepTurn } from '../run/steps.ts';
 import { writeFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
-import { resolveVision } from '../config/agent.ts';
+import { resolveActObservation, resolveVision } from '../config/agent.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { withAbort, withTimeout } from '../internal/time.ts';
-import type { ActOptions, ActResult, AgentErrorCode, JsonValue, ModelInstance, Secret, VisionMode } from '../types.ts';
+import type { ActOptions, ActResult, AgentErrorCode, JsonValue, ModelInstance, Secret, VisionMode, ActObservationMode } from '../types.ts';
+import { bindPixelRequestBudget } from './model/pixel-request-budget.ts';
+import { bindModelCallAdmission } from './model/model-call-admission.ts';
 import { AgentError, CATEGORY_BY_CODE, toAgentError } from './error.ts';
 import { redactParams, validateActOptions, validateInstruction, validateParams, validateVerdict } from './act-validation.ts';
 import { ActionDispatcher } from './action-dispatcher.ts';
@@ -68,6 +70,7 @@ export interface DispatchSpec {
   readonly screenshot?: boolean;
   /** Assert only: the `vision` the call asked for; the executor must declare `vision: true` to receive it. */
   readonly vision?: VisionMode;
+  readonly observation?: ActObservationMode;
 }
 
 /** Runs one `agent.act()` call as a harness-dispatched executor step. */
@@ -80,6 +83,11 @@ export async function runActStep(
   const normalized = validateInstruction(instruction, 'agent.act');
   validateActOptions(options, extraArguments);
   const { projected, secrets, templates } = validateParams(options?.params);
+  const agent = runtime.select(options?.agent);
+  const observation = resolveActObservation(options?.observation, agent.config.observationPolicy.act);
+  if ((options?.observation !== undefined || observation !== 'adaptive') && agent.executor.observationPolicy !== true) {
+    throw new ConfigurationError('UNSUPPORTED_CAPABILITY', `executor ${JSON.stringify(agent.executor.name)} must declare observationPolicy: true to support agent.act observation`);
+  }
   return dispatchAgentStep(runtime, {
     api: 'agent.act',
     kind: 'act',
@@ -92,7 +100,8 @@ export async function runActStep(
     maxSteps: options?.maxSteps,
     maxModelCalls: options?.maxModelCalls,
     agent: options?.agent,
-  });
+    ...(agent.executor.observationPolicy === true ? { observation } : {}),
+  }, agent);
 }
 
 /**
@@ -111,8 +120,8 @@ export async function runAssertStep(
 ): Promise<void> {
   const normalized = validateInstruction(assertion, 'agent.assert');
   const agent = runtime.select(options?.agent);
-  const vision = resolveVision(options?.vision);
-  if (options?.vision !== undefined && agent.executor.vision !== true) {
+  const vision = resolveVision(options?.vision, agent.config.observationPolicy.judgments);
+  if ((options?.vision !== undefined || vision !== false) && agent.executor.vision !== true) {
     throw new ConfigurationError(
       'UNSUPPORTED_CAPABILITY',
       `agent.assert vision (options.vision) is not supported with the executor ${JSON.stringify(agent.executor.name)}: the executor decides what its model sees`,
@@ -226,6 +235,8 @@ class ActDispatch {
       maxObservationBytes: agent.config.maxObservationBytes,
       maxInputTokens: agent.config.maxInputTokens,
       instructionBytes: tokenUpperBound(spec.instruction),
+      treeOnly: spec.observation === 'tree-only',
+      trackModelPixels: agent.executor.observationPolicy === true,
     });
     this.dispatcher = new ActionDispatcher(runtime, this.accounting, this.feed, queue, {
       instruction: spec.instruction,
@@ -255,7 +266,7 @@ class ActDispatch {
               ...(agent.executor.version === undefined ? {} : { version: agent.executor.version }),
             },
             // Redacted already (`dispatchAgentStep`): the key digests the context the executor reads.
-            agent: { name: agent.name, context: agent.agentContext },
+            agent: { name: agent.name, context: agent.agentContext, ...(spec.observation === undefined || spec.observation === 'adaptive' ? {} : { observation: spec.observation }) },
             redact: runtime.redact,
             redactCut: runtime.redactCut,
             maxActions: this.accounting.maxActions,
@@ -274,7 +285,7 @@ class ActDispatch {
     );
     this.accounting.metrics.ledgerBytes = ledger.bytes;
     const replayedPrefix = this.stepCache?.replayedPrefix;
-    return {
+    const context: StepExecutorContext = {
       step: {
         kind: this.spec.kind,
         index: this.stepIndex,
@@ -285,6 +296,7 @@ class ActDispatch {
           purpose: secret.purpose,
         })),
         ...(this.spec.vision === undefined ? {} : { vision: this.spec.vision }),
+        ...(this.spec.observation === undefined ? {} : { observation: this.spec.observation }),
       },
       target: this.runtime.target,
       attempt: this.runtime.attempt,
@@ -304,9 +316,12 @@ class ActDispatch {
         actionsUsed: () => this.accounting.metrics.actionSteps,
         remainingMs: () => this.accounting.remainingMs(),
         recordModelCall: (usage) => this.accounting.recordModelCall(usage),
+        checkModelCall: () => this.accounting.checkModelCall(),
         runTool: (call, body) => this.dispatcher.runTool(call, body),
       },
       observe: (options) => this.feed.observe(options),
+      recordPixelInput: (input) => this.feed.recordPixelInput(input),
+      get treeAvailable() { return dispatch.feed.latest?.kind !== 'pixels'; },
       get pixelsTainted() {
         return dispatch.runtime.exposure.withholdsPixels;
       },
@@ -328,6 +343,11 @@ class ActDispatch {
       attachScreenshot: (pixels, label) => this.attachScreenshot(pixels, label),
       actions: this.dispatcher.actions,
     };
+    bindModelCallAdmission(context, () => this.accounting.reserveModelCall());
+    if (this.spec.observation === 'tree+pixels' && this.agent.executor.observationPolicy === true) {
+      bindPixelRequestBudget(context, this.agent.config.maxInputTokens, (error) => this.accounting.fatalize(error));
+    }
+    return context;
   }
 
   /**

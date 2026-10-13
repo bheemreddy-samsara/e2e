@@ -21,6 +21,7 @@ import type { ObservationPixels, SemanticNode, ViewportPoint, ViewportSize } fro
 import type { VisionDegradation, StepTurn } from '../run/steps.ts';
 import type {
   AgentErrorCode,
+  ActObservationMode,
   JsonValue,
   ModelInstance,
   ProviderOptions,
@@ -35,6 +36,8 @@ import { AGENT_CODE_TABLE, isAgentError, type AgentError } from './error.ts';
  * judges a condition and must not change application state.
  */
 export interface ExecutorStep {
+  /** Acting policy, supplied only to executors declaring observationPolicy: true. */
+  readonly observation?: ActObservationMode;
   readonly kind: 'act' | 'assert';
   /** Zero-based position of this step in the attempt's step timeline. */
   readonly index: number;
@@ -330,6 +333,8 @@ export interface ExecutorBudgets {
    * `maxModelCalls`: the budget is enforced, not advisory.
    */
   recordModelCall(usage?: ExecutorModelCall): void;
+  /** Checks before a request or request-only retry; throws a runner-vouched hard stop at the ceiling. */
+  checkModelCall?(): void;
   /**
    * Runs one project tool (a `defineTool` value) under the step's accounting:
    * a mutating tool reserves an action-budget slot before its body runs and
@@ -379,6 +384,10 @@ export interface ReplayedPrefix {
 export type ExecutorVerb = keyof ExecutorActions;
 
 export interface StepExecutorContext {
+  /** Whether the latest capture has semantic evidence to degrade to. */
+  readonly treeAvailable?: boolean;
+  /** Reports images accepted by the model and safe degradation, not merely captured images. */
+  recordPixelInput?(input: { readonly bytes?: number; peakBytes?: number; readonly degraded?: VisionDegradation }): void;
   readonly step: ExecutorStep;
   /** The attempt this step runs in: identity, end-of-attempt signal, and scratch memory. */
   readonly attempt: ExecutorAttempt;
@@ -479,6 +488,8 @@ export interface StepVerdict {
 
 /** The brain socket: one step in, one verdict out. */
 export interface StepExecutor {
+  /** Explicit promise to honor step.observation, including tree-only and refresh after actions. */
+  readonly observationPolicy?: true;
   readonly name: string;
   readonly version?: string;
   /**

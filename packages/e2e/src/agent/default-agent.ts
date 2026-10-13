@@ -7,7 +7,7 @@
  * a caller's own prompt and vocabulary.
  */
 
-import type { Tool, ToolExecutionOptions, ToolSet } from 'ai';
+import type { ModelMessage, Tool, ToolExecutionOptions, ToolSet } from 'ai';
 
 import { BUILT_IN_AGENT } from './agent-brand.ts';
 import { AgentError } from './error.ts';
@@ -62,52 +62,88 @@ export function createBuiltInAgent(options: BuiltInAgentOptions = {}): StepExecu
     [BASE_RULES, options.system]
       .filter((part): part is string => part !== undefined && part.trim() !== '')
       .join('\n\n');
-  return createToolLoopExecutor({
+  return {
     ...BUILT_IN_AGENT,
-    system,
-    prepareMessages: (messages) => compactScreenshotHistory(compactScreenHistory(messages)),
-    tools: (context, helpers) => ({
-      ...guardedTools(helpers, projectTools(context, userTools)),
-      ...createGrammarTools(context, { guard: helpers.guard, screen: presenterFor(context) }),
-    }),
-    buildPrompt: async (context) => {
-      // The opening look is tree-only, unless pixels are allowed and no
-      // listed interactive node exists at all: then the opening prompt
-      // carries a screenshot, because the tree describes a canvas, a game,
-      // or a semantics-free native screen too poorly to act on, and the model
-      // would only spend a turn asking for one. One listed control is enough
-      // to leave the decision to the model; a small page is not a blind one.
-      let observation = await context.observe();
-      if (!context.pixelsTainted && observation.pixels === undefined && interactiveNodeCount(observation) === 0) {
-        observation = await context.observe({ pixels: true });
-      }
-      const parts = [
-        context.step.kind === 'assert'
-          ? `Judge whether this assertion holds; do not change application state: ${context.step.instruction}`
-          : `Execute this test step: ${context.step.instruction}`,
-      ];
-      if (context.step.params !== undefined) {
-        parts.push(`Step parameters:\n${JSON.stringify(context.step.params)}`);
-      }
-      if (context.replayedPrefix !== undefined) {
-        parts.push(formatReplayedPrefix(context.replayedPrefix));
-      }
-      if (context.ledger !== '') {
-        parts.push(`Previously completed steps:\n${context.ledger}`);
-      }
-      const opening = presenterFor(context).open(observation);
-      if (typeof opening === 'string') return [...parts, opening].join('\n\n');
-      return [
-        {
-          role: 'user',
-          content: [
-            { type: 'text', text: [...parts, opening.text].join('\n\n') },
-            { type: 'file', data: opening.pixels.data, mediaType: opening.pixels.mediaType },
-          ],
+    observationPolicy: true,
+    runStep(stepContext) {
+      let pendingMutation = false;
+      let uncertainMutation = false;
+      return createToolLoopExecutor({
+        ...BUILT_IN_AGENT,
+        observationPolicy: true,
+        system,
+        prepareMessages: async (messages) => {
+          let prepared = messages;
+          if (pendingMutation) {
+            // Outside the mutating tool's operation queue and result contract.
+            // If this look fails, no next model request may use the old screen.
+            const fresh = presenterFor(stepContext).present(await stepContext.observe({ pixels: true }), {
+              lead: uncertainMutation
+                ? 'A failed project tool may have committed its mutation. Verify the fresh screen before doing anything like it again; do not repeat it from the failure alone.'
+                : 'Fresh screen after mutating project tools.',
+              expectChange: true,
+            });
+            const evidence: ModelMessage = {
+              role: 'user',
+              content: typeof fresh === 'string' ? fresh : [
+                { type: 'text', text: fresh.text },
+                { type: 'file', data: fresh.pixels.data, mediaType: fresh.pixels.mediaType },
+              ],
+            };
+            prepared = [...messages, evidence];
+            pendingMutation = false;
+            uncertainMutation = false;
+          }
+          return compactScreenshotHistory(compactScreenHistory(prepared));
         },
-      ];
+        tools: (context, helpers) => ({
+          ...guardedTools(helpers, projectTools(context, userTools, (succeeded) => {
+            if (context.step.observation !== 'tree+pixels') return;
+            pendingMutation = true;
+            uncertainMutation ||= !succeeded;
+          })),
+          ...createGrammarTools(context, { guard: helpers.guard, screen: presenterFor(context) }),
+        }),
+        buildPrompt: async (context) => {
+          // The opening look is tree-only, unless pixels are allowed and no
+          // listed interactive node exists at all: then the opening prompt
+          // carries a screenshot, because the tree describes a canvas, a game,
+          // or a semantics-free native screen too poorly to act on, and the model
+          // would only spend a turn asking for one. One listed control is enough
+          // to leave the decision to the model; a small page is not a blind one.
+          let observation = await context.observe(context.step.observation === 'tree+pixels' ? { pixels: true } : undefined);
+          if (context.step.observation !== 'tree-only' && !context.pixelsTainted && observation.pixels === undefined && interactiveNodeCount(observation) === 0) {
+            observation = await context.observe({ pixels: true });
+          }
+          const parts = [
+            context.step.kind === 'assert'
+              ? `Judge whether this assertion holds; do not change application state: ${context.step.instruction}`
+              : `Execute this test step: ${context.step.instruction}`,
+          ];
+          if (context.step.params !== undefined) {
+            parts.push(`Step parameters:\n${JSON.stringify(context.step.params)}`);
+          }
+          if (context.replayedPrefix !== undefined) {
+            parts.push(formatReplayedPrefix(context.replayedPrefix));
+          }
+          if (context.ledger !== '') {
+            parts.push(`Previously completed steps:\n${context.ledger}`);
+          }
+          const opening = presenterFor(context).open(observation);
+          if (typeof opening === 'string') return [...parts, opening].join('\n\n');
+          return [
+            {
+              role: 'user',
+              content: [
+                { type: 'text', text: [...parts, opening.text].join('\n\n') },
+                { type: 'file', data: opening.pixels.data, mediaType: opening.pixels.mediaType },
+              ],
+            },
+          ];
+        },
+      }).runStep(stepContext);
     },
-  });
+  };
 }
 
 /**
@@ -149,6 +185,7 @@ function formatReplayedPrefix(prefix: ReplayedPrefix): string {
 export function projectTools(
   context: StepExecutorContext,
   tools: Readonly<Record<string, AgentTool>>,
+  afterMutation?: (succeeded: boolean) => void,
 ): ToolSet {
   const wrapped: Record<string, ToolSet[string]> = {};
   for (const [name, defined] of Object.entries(tools)) {
@@ -162,17 +199,26 @@ export function projectTools(
     wrapped[name] = {
       ...tool,
       execute: async (input: never, executionOptions: ToolExecutionOptions<unknown>) => {
-        const result: unknown = await context.budgets.runTool({ name, mutates }, async () =>
-          execute(input, withToolContext(executionOptions, {
-            observe: (options) => {
-              if (mutates) {
-                throw new AgentError('POLICY_DENIED', 'only read-only tools may request observations; observe in a separate tool call');
-              }
-              return context.observe(options);
-            },
-            attachScreenshot: (pixels, label) => context.attachScreenshot(pixels, label),
-          })),
-        );
+        const result: unknown = await context.budgets.runTool({ name, mutates }, async () => {
+          let succeeded = false;
+          try {
+            const value: unknown = await execute(input, withToolContext(executionOptions, {
+              observe: (options) => {
+                if (mutates) {
+                  throw new AgentError('POLICY_DENIED', 'only read-only tools may request observations; observe in a separate tool call');
+                }
+                return context.observe(options);
+              },
+              attachScreenshot: (pixels, label) => context.attachScreenshot(pixels, label),
+            }));
+            succeeded = true;
+            return value;
+          } finally {
+            // A budget refusal never enters this body; a dispatched failure
+            // can still have changed the app and needs fresh evidence too.
+            if (mutates) afterMutation?.(succeeded);
+          }
+        });
         // A text result is bounded like every other thing the model reads;
         // structured results are the tool's own contract and pass through.
         return typeof result === 'string' ? boundToolOutput(result).text : result;

@@ -72,6 +72,8 @@ export interface ObservationFeedOptions {
   readonly maxInputTokens: number;
   /** Bytes of the step's instruction, which opens the history every turn resends. */
   readonly instructionBytes: number;
+  readonly treeOnly?: boolean;
+  readonly trackModelPixels?: boolean;
 }
 
 export class ObservationFeed {
@@ -156,7 +158,7 @@ export class ObservationFeed {
     }
     return this.queue.run(async () => {
       this.accounting.checkpoint();
-      const pixels = options.pixels === true;
+      const pixels = options.pixels === true && this.options.treeOnly !== true;
       const opening = this.opening;
       this.opening = undefined;
       const reusable = opening !== undefined && opening === this.newest && this.accounting.metrics.actionSteps === 0 &&
@@ -172,7 +174,8 @@ export class ObservationFeed {
       viewport: observation.viewport,
       ...(observation.path === undefined ? {} : { path: observation.path }),
     };
-    const pixels = options.pixels === true || observation.kind === 'pixels' ? this.pixelsFor(observation) : {};
+    const pixels = this.options.treeOnly !== true && (options.pixels === true || observation.kind === 'pixels') ? this.pixelsFor(observation) : {};
+    if (this.options.treeOnly === true && observation.kind === 'pixels') throw new TestError('UNSUPPORTED_CAPABILITY', 'tree-only observation requires semantic evidence');
     if (observation.kind === 'pixels') {
       return { ...metadata, text: observation.text, treeUnavailable: true, truncated: true, ...pixels };
     }
@@ -377,7 +380,7 @@ export class ObservationFeed {
       guard: (cause) => this.accounting.checkpoint(cause),
       signal: this.runtime.engine.signal,
       api: this.accounting.api,
-      fallback: true,
+      fallback: this.options.treeOnly !== true,
       tainted: () => this.runtime.exposure.withholdsPixels,
     });
     if (raw.kind === 'pixels') {
@@ -389,7 +392,7 @@ export class ObservationFeed {
       redact: this.runtime.redact,
       redactCut: this.runtime.redactCut,
       maxBytes: this.byteBudget(pixels || raw.kind === 'pixels'),
-      pixelsAllowed: !this.runtime.exposure.withholdsPixels,
+      pixelsAllowed: this.options.treeOnly !== true && !this.runtime.exposure.withholdsPixels,
       appOrigin: this.runtime.app.base?.origin,
     });
     return prepared;
@@ -428,10 +431,25 @@ export class ObservationFeed {
       return { pixelsWithheld: outcome.withheld };
     }
     this.recordPixelDecision('allowed');
-    this.pixelsSent = true;
+    if (this.options.trackModelPixels !== true) this.pixelsSent = true;
     const metrics = this.accounting.metrics;
-    metrics.pixelBytes = Math.max(metrics.pixelBytes ?? 0, outcome.pixels.data.byteLength);
+    if (this.options.trackModelPixels !== true) metrics.pixelBytes = Math.max(metrics.pixelBytes ?? 0, outcome.pixels.data.byteLength);
     return { pixels: outcome.pixels };
+  }
+
+  /** Records accepted image input at the model boundary, or why it was removed. */
+  recordPixelInput(input: { readonly bytes?: number; peakBytes?: number; readonly degraded?: VisionDegradation }): void {
+    if (input.degraded !== undefined) {
+      this.visionDegraded = input.degraded;
+      this.recordPixelDecision('denied', input.degraded);
+    }
+    if (input.bytes !== undefined) {
+      this.pixelsSent = true;
+      const metrics = this.accounting.metrics;
+      metrics.pixelBytes = Math.max(metrics.pixelBytes ?? 0, input.peakBytes ?? input.bytes);
+      metrics.modelImageBytes = (metrics.modelImageBytes ?? 0) + input.bytes;
+      this.recordPixelDecision('allowed');
+    }
   }
 
   private recordPixelDecision(decision: 'allowed' | 'denied', code?: string): void {

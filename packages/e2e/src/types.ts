@@ -173,12 +173,25 @@ export interface ExtractOptions<Schema extends StandardSchemaV1> extends VisionO
   timeout?: number;
 }
 
+/** Evidence the acting model receives. Adaptive preserves the existing pixel-tool loop. */
+export type ActObservationMode = 'adaptive' | 'tree-only' | 'tree+pixels';
+
+/** Named-agent defaults for model observations, independent of debug artifacts. */
+export interface AgentObservationPolicy {
+  /** Default adaptive; tree+pixels requests safe pixels on the first look and after actions. */
+  act?: ActObservationMode;
+  /** Default false; true requests tree plus safe pixels for assert, waitFor, and extract. */
+  judgments?: boolean;
+}
+
 /**
  * One `act` call: the values the instruction refers to and the step's
  * budgets. Structured output is a judgment-tier option: `extract` takes
- * `schema`. Pixels are the model's to ask for, not an option.
+ * `schema`. Pixels follow the agent observation policy, or the call's observation override.
  */
 export interface ActOptions extends AgentOption {
+  /** Overrides this agent's acting observation policy for this call. Not the judgment vision option. */
+  observation?: ActObservationMode;
   /**
    * JSON-safe values the instruction refers to, at most 64 KiB and 32 levels
    * deep. A `Secret` reaches the model by name only; the runner fills it. A
@@ -1176,6 +1189,8 @@ export interface ModelInstance {
   readonly modelId: string;
   /** The generate call every AI SDK language model implements; what tells a live instance from its three id strings. */
   readonly doGenerate: (...args: never[]) => unknown;
+  /** Optional explicit image-input veto; false degrades tree-plus-pixel requests without sending images. */
+  readonly supportsImageInput?: boolean;
 }
 
 /** Replay cache posture. In CI an unset mode is `read-only`, unless `cache.store` is set. */
@@ -1310,6 +1325,8 @@ export interface AgentTool {
 
 /** The options every agent takes, whichever brain runs its `act` steps. */
 export interface AgentOptions {
+  /** Opt-in model evidence defaults. Each named agent resolves its own policy. */
+  observationPolicy?: AgentObservationPolicy;
   /** An AI SDK model instance; no implicit default. */
   model?: ModelInstance;
   /**

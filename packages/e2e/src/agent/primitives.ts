@@ -564,7 +564,7 @@ export function createGrammarTools(
   // control under it is acted on by id, policed and recorded like any other
   // action, and only a point on nothing listed reaches the engine as a bare
   // point (tap) or through the keyboard (type, press).
-  if (!context.pixelsTainted) {
+  if (!context.pixelsTainted && context.step.observation !== 'tree-only') {
     tools['screenshot'] = screenTool({
       description:
         'Attach a screenshot of the current viewport. Use it when the screen lists too little to act on (a canvas, a map, an image, a game, a system sheet) or contradicts what you expect. From then on every action result carries a fresh screenshot too, so you can see what each action did.',
@@ -811,7 +811,7 @@ function verbKit(context: StepExecutorContext, options: GrammarToolOptions) {
   const inOrder = <T>(body: () => Promise<T>): Promise<T> => queue.run(body);
   /** The screen after an action: the changes since the one the model holds and, once the step shows pixels, a fresh screenshot. */
   const present = async (lead: string, update: ScreenUpdate = {}): Promise<ScreenOutput> =>
-    screen.present(await context.observe({ pixels: screen.showingPixels }), { lead, ...update });
+    screen.present(await context.observe({ pixels: context.step.observation === 'tree+pixels' || screen.showingPixels }), { lead, ...update });
   /** An action and its look at the result, for a caller already inside the queue. */
   const perform = (
     label: ActionLabel,
@@ -909,6 +909,7 @@ export function trackModelCalls(
   let turnStartedMs = Date.now();
   return {
     onStepStart: () => {
+      context.budgets.checkModelCall?.();
       turnStartedMs = Date.now();
     },
     onStepEnd: (step) => {

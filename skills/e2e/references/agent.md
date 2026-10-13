@@ -55,7 +55,7 @@ gates, and limits.
 - Pass a model instance, not a string (`INVALID_CONFIG`).
 - An agents entry is one plain object of `model`, `judge`, `system`,
   `context`, `tools`, `maxSteps`, `maxModelCalls`, `judgmentTimeout`,
-  `maxObservationBytes`, `maxInputTokens`, `providerOptions`, or `executor`
+  `maxObservationBytes`, `maxInputTokens`, `providerOptions`, `observationPolicy`, or `executor`
   for a custom brain; none inherits `model` or `context` from `default`.
 - `model` drives `agent.act`. Judgments use `judge` when set, else `model`.
 - A missing model for the built-in agent raises one run-level
@@ -118,8 +118,52 @@ Options:
 - `timeout`: the config `timeout`.
 - `maxSteps` (default 25 actions), `maxModelCalls` (default 25): may only
   lower the agent's limits, else `INVALID_ARGUMENT`.
-- No `schema` (use `extract({ schema })`) and no `vision`: the model decides
-  when it needs pixels.
+- No `schema` (use `extract({ schema })`) and no `vision`.
+- Named-agent `observationPolicy: { act: 'tree+pixels', judgments: true }`
+  opts into safe first-turn and post-action pixels, and judgment pixel defaults.
+  Without an observation policy, acting defaults stay adaptive and judgments
+  stay tree-only. With the policy above, both default to pixels. In opt-in mode,
+  mutating project tools also get a fresh harness observation before the next
+  model turn, separate from their results. A failed tool may have committed:
+  inspect that evidence, never repeat a mutation from its failure alone.
+- `act({ observation: 'tree-only' })` disables pixel tools and fallback for one
+  call; `'adaptive'` restores the existing loop. Judgment `vision: false`
+  overrides defaults. Strict `vision: 'only'` still fails if pixels are denied.
+- Confirmed image support loss stops optional pixels on later judgment polls
+  and restores their semantic-tree input budget.
+- Masking, engine withholding, taint, and model support always win. Read actual
+  `visionInput`, `visionDegraded`, policy events, `metrics.modelImageBytes`, and
+  model usage. More images add capture latency and image tokens; keep the
+  existing model-call, input-token, and deadline budgets.
+- In `'tree+pixels'` mode the built-in agent and opted-in
+  `createToolLoopExecutor` check the final prepared request before transport,
+  including image-rejection replacements. `maxInputTokens` bounds a conservative
+  estimate: UTF-8 bytes of serialized instructions, context, tools, provider
+  hints, history and inline images, plus at least 4,784 units per image. Larger
+  encoded PNG geometry uses its 28 px patch count instead of that floor. Resent
+  and duplicate images count each time; non-inline images that cannot be measured
+  fail closed without fetching. This is not a portable tokenizer or a guarantee
+  of provider image billing. The 768 px cap and a tiny PNG cannot substitute for
+  the whole-request ceiling. An over-budget request raises
+  `STEP_BUDGET_EXHAUSTED` before transport, never by discarding required images or
+  replaying actions. Provider token metrics stay separate. Adaptive and explicit
+  tree-only request behavior stays unchanged.
+- Non-default acting modes have isolated cache keys. Adaptive recordings remain
+  valid; strict-cache policy switches may need re-recording. Replays use no
+  model images. Debug artifacts and deterministic locator steps are independent.
+- Supported tool-loop helpers reserve model-call admission before transport,
+  including concurrent calls on one step. Rejections consume the existing
+  request budget; replacements need admission too. Refused requests and
+  transport errors release reservations without accepted usage. Caught budget
+  refusals remain fatal; ended contexts are `CANCELLED` before transport.
+  Opaque custom transports remain the executor's responsibility. Stall retries
+  that retain admission keep the logical call's original start time, including
+  the abandoned request and retry backoff in its duration.
+- Built-in judgments (assert, waitFor, extract) count attempted model calls
+  before transport; failed transports do not release that count.
+- Custom executors need `observationPolicy: true` for acting policy and
+  `vision: true` for judgment defaults; never assume a third-party brain
+  honors these options.
 
 The tools, one per engine action. Name the target as the screen names it
 (files in `params`); the agent picks the verb:

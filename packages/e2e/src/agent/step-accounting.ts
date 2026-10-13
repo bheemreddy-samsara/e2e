@@ -68,6 +68,7 @@ export class StepAccounting {
   private firstHardStop: AgentError | undefined;
   /** Set by `close()`: late executor accounting must not land on the next step. */
   private ended = false;
+  private pendingModelCalls = 0;
   private modelProvider: string | undefined;
   private modelId: string | undefined;
   /** Whether the step is replaying a recorded trace: its actions are then a test's, not the model's. */
@@ -170,6 +171,31 @@ export class StepAccounting {
     });
     this.runtime.debug?.record('agent.model', Math.max(0, Math.round(usage?.durationMs ?? 0)));
     this.countModelCall();
+  }
+
+  /** Refuses another model request before it leaves the step's budget. */
+  checkModelCall(): void {
+    if (this.ended) throw new AgentError('CANCELLED', 'the step has ended');
+    if (this.firstHardStop !== undefined) throw this.firstHardStop;
+    this.checkpoint();
+    if (this.metrics.modelCalls >= this.maxModelCalls) {
+      throw this.fatalize(new AgentError('STEP_BUDGET_EXHAUSTED', `${this.api} exhausted its model-call budget of ${this.maxModelCalls}`));
+    }
+  }
+
+  /** Holds admission without recording usage; release is idempotent on every exit path. */
+  reserveModelCall(): () => void {
+    this.checkModelCall();
+    if (this.metrics.modelCalls + this.pendingModelCalls >= this.maxModelCalls) {
+      throw this.fatalize(new AgentError('STEP_BUDGET_EXHAUSTED', `${this.api} exhausted its model-call budget of ${this.maxModelCalls}`));
+    }
+    this.pendingModelCalls += 1;
+    let released = false;
+    return () => {
+      if (released) return;
+      released = true;
+      this.pendingModelCalls -= 1;
+    };
   }
 
   private countModelCall(): void {

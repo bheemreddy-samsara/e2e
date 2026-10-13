@@ -251,6 +251,8 @@ function withheldAdvice(code: VisionDegradation): string {
       return 'a secret was filled in this attempt, so no pixels leave the runner until it ends (PIXEL_TAINTED). Work from the tree and tap listed nodes by id.';
     case 'MASKING_UNPROVEN':
       return 'the engine could not prove every secure field on screen masked (MASKING_UNPROVEN). Work from the tree and tap listed nodes by id.';
+    case 'MODEL_IMAGES_UNSUPPORTED':
+      return 'this model does not support image input (MODEL_IMAGES_UNSUPPORTED). Work from the tree.';
     case 'UNSUPPORTED_CAPABILITY':
       return 'this engine captures no pixels (UNSUPPORTED_CAPABILITY). Work from the tree and tap listed nodes by id.';
   }

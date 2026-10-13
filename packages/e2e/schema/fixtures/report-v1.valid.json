@@ -138,8 +138,11 @@
                   "actionSteps": 1,
                   "observationBytes": 512,
                   "contextBytes": 0,
-                  "ledgerBytes": 0
+                  "ledgerBytes": 0,
+                  "pixelBytes": 1024,
+                  "modelImageBytes": 1024
                 },
+                "visionInput": true,
                 "cache": {
                   "mode": "missed",
                   "reason": "gap",
@@ -159,7 +162,8 @@
                     ],
                     "outcome": "Tapped #n19.\nScreen changes: 4 added."
                   }
-                ]
+                ],
+                "visionDegraded": "MODEL_IMAGES_UNSUPPORTED"
               },
               {
                 "id": "018f0f5c-7b2a-7abc-8abc-0123456789ab:1",

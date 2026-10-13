@@ -16,6 +16,7 @@ import { packageVersion } from '../../internal/package-version.ts';
 import { AgentError } from '../error.ts';
 import { isContextOverflow } from './overflow.ts';
 import { providerHints, type ProviderModelRef } from './provider-hints.ts';
+import { withSafePixelInput } from './pixel-input.ts';
 import { withStallGuard } from './stall.ts';
 import {
   imageTokenUpperBound,
@@ -82,7 +83,7 @@ export function createModelAdapter(model: ResolvedModel | undefined, agentName =
       // is where the prompt cache is addressed; the prompt itself is one-off.
       const providerOptions = hints.providerOptions(call.providerOptions, call.system);
       const settings = {
-        model: requestModel,
+        model: call.pixelInput === undefined ? requestModel : withSafePixelInput(ai, requestModel, call.pixelInput),
         instructions: hints.instructions(call.system),
         // Text-only calls keep the plain prompt form; images require the
         // multi-part message form, and both must carry the same instruction

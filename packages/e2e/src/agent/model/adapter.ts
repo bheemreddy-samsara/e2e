@@ -48,6 +48,7 @@ export interface ModelCall<Value> {
    * for vision calls; a non-multimodal provider rejects the request.
    */
   readonly images?: readonly ModelImage[] | undefined;
+  readonly pixelInput?: import('./pixel-input.ts').PixelInputPolicy | undefined;
   readonly schemaName: string;
   /**
    * Closed response grammar sent to the provider as a structured-output

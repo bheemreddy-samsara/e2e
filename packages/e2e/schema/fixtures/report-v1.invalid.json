@@ -7,7 +7,9 @@
     "targets": [],
     "results": [
       {
-        "tags": [""],
+        "tags": [
+          ""
+        ],
         "attempts": [
           {
             "artifacts": [
@@ -59,9 +61,11 @@
                   "actionSteps": 0,
                   "observationBytes": 0,
                   "contextBytes": 0,
-                  "ledgerBytes": 0
+                  "ledgerBytes": 0,
+                  "modelImageBytes": -1
                 },
-                "artifacts": []
+                "artifacts": [],
+                "visionDegraded": "MODEL_UNKNOWN"
               }
             ]
           }

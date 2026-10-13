@@ -9,6 +9,7 @@ import { ConfigurationError, TestError } from '../internal/errors.ts';
 import { didYouMean } from '../internal/suggest.ts';
 import type {
   AgentConfig,
+  ActObservationMode,
   AgentTool,
   ModelInstance,
   ProviderOptions,
@@ -41,6 +42,7 @@ export function modelLabel(model: ResolvedModel): string {
 }
 
 export interface ResolvedAgentConfig {
+  readonly observationPolicy: { readonly act: ActObservationMode; readonly judgments: boolean };
   /**
    * The custom brain `agent.act()` dispatches to (`agents.<name>.executor`);
    * undefined selects the built-in agent, built at fixture time from
@@ -103,6 +105,7 @@ const AGENT_KEYS = [
   'maxObservationBytes',
   'maxInputTokens',
   'providerOptions',
+  'observationPolicy',
 ] as const;
 
 const AGENT_KEY_SET: ReadonlySet<string> = new Set(AGENT_KEYS);
@@ -202,8 +205,16 @@ export function resolveAgentConfig(
   const maxInputTokens =
     boundedInt(agent?.maxInputTokens, `${label}.maxInputTokens`, 1, 1_000_000) ?? DEFAULT_INPUT_TOKENS;
 
+  const observationPolicy = resolveObservationPolicy(agent?.observationPolicy, label);
+  if (executor !== undefined && observationPolicy.act !== 'adaptive' && executor.observationPolicy !== true) {
+    throw new ConfigurationError('UNSUPPORTED_CAPABILITY', `${label}.executor must declare observationPolicy: true to support the acting observation policy`);
+  }
+  if (executor !== undefined && observationPolicy.judgments && executor.vision !== true) {
+    throw new ConfigurationError('UNSUPPORTED_CAPABILITY', `${label}.executor must declare vision: true to support judgment pixel defaults`);
+  }
   const model = resolveCanonicalModel(agent?.model, executor?.model, label, 'model');
   return {
+    observationPolicy,
     executor,
     model,
     judge: resolveCanonicalModel(agent?.judge, executor?.judge, label, 'judge') ?? model,
@@ -374,8 +385,8 @@ function isVisionMode(value: unknown): value is VisionMode {
 }
 
 /** A judgment's `vision` option as called: the tree unless the call asks for pixels; anything else is INVALID_ARGUMENT. */
-export function resolveVision(requested: unknown): VisionMode {
-  if (requested === undefined) return false;
+export function resolveVision(requested: unknown, fallback: boolean = false): VisionMode {
+  if (requested === undefined) return fallback;
   if (!isVisionMode(requested)) throw new TestError('INVALID_ARGUMENT', "vision must be true, false, or 'only'");
   return requested;
 }
@@ -442,6 +453,9 @@ function resolveModel(model: ModelInstance | undefined, label: string): Resolved
       `${label} must be an AI SDK model instance, e.g. gateway('openai/gpt-6-luna-fast') from 'ai'`,
     );
   }
+  if (model.supportsImageInput !== undefined && typeof model.supportsImageInput !== 'boolean') {
+    throw new ConfigurationError('INVALID_CONFIG', `${label}.supportsImageInput must be boolean when supplied`);
+  }
   return { provider: model.provider, id: model.modelId, model };
 }
 
@@ -459,4 +473,25 @@ function validateContext(context: unknown, label: string): string | undefined {
     );
   }
   return context;
+}
+
+/** Validates the closed acting policy value set on a call. */
+export function resolveActObservation(requested: unknown, fallback: ActObservationMode = 'adaptive'): ActObservationMode {
+  if (requested === undefined) return fallback;
+  if (requested === 'adaptive' || requested === 'tree-only' || requested === 'tree+pixels') return requested;
+  throw new TestError('INVALID_ARGUMENT', 'observation must be adaptive, tree-only, or tree+pixels');
+}
+
+/** Resolves named-agent observation defaults without inheriting another agent's policy. */
+function resolveObservationPolicy(value: unknown, label: string): ResolvedAgentConfig['observationPolicy'] {
+  if (value === undefined) return { act: 'adaptive', judgments: false };
+  if (!isPlainObject(value) || Object.keys(value).some((key) => key !== 'act' && key !== 'judgments') ||
+      (value['judgments'] !== undefined && typeof value['judgments'] !== 'boolean')) {
+    throw new ConfigurationError('INVALID_CONFIG', `${label}.observationPolicy must be { act, judgments }, with boolean judgments`);
+  }
+  try {
+    return { act: resolveActObservation(value['act']), judgments: value['judgments'] === true };
+  } catch {
+    throw new ConfigurationError('INVALID_CONFIG', `${label}.observationPolicy.act must be adaptive, tree-only, or tree+pixels`);
+  }
 }

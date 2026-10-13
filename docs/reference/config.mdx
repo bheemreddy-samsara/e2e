@@ -679,6 +679,8 @@ export interface AgentTool {
 
 /** The options every agent takes, whichever brain runs its `act` steps. */
 export interface AgentOptions {
+  /** Model evidence defaults; independent of debug artifacts. */
+  observationPolicy?: { act?: 'adaptive' | 'tree-only' | 'tree+pixels'; judgments?: boolean };
   /** An AI SDK model instance; no implicit default. */
   model?: ModelInstance;
   /** Model for `assert`, `waitFor`, and `extract`; defaults to `model`. */
@@ -754,6 +756,11 @@ export default {
   },
 } satisfies E2EConfig;
 ```
+
+`observationPolicy` defaults to adaptive acting and tree-only judgments. See
+[Observation policy](/reference/agent#observation-policy) for safe pixel opt-in,
+per-call overrides, budgets, and cache compatibility. Hosted sessions use these
+named-agent defaults too.
 
 Every entry starts from the built-in defaults. Agents do not inherit from
 each other: `ux` above gets no `context` from `default`, and a key left out of

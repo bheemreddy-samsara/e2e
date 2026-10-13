@@ -77,13 +77,15 @@ export interface StepMetrics {
   ledgerBytes: number;
   /** Largest masked image sent to the model in this step, in bytes. */
   pixelBytes?: number;
+  /** Sum of image bytes accepted in model requests, including resent context. */
+  modelImageBytes?: number;
 }
 
 /**
  * Why a vision step fell back to tree-only input. Pixel evidence degrades
  * rather than failing the step.
  */
-export type VisionDegradation = 'PIXEL_TAINTED' | 'MASKING_UNPROVEN' | 'UNSUPPORTED_CAPABILITY';
+export type VisionDegradation = 'PIXEL_TAINTED' | 'MASKING_UNPROVEN' | 'UNSUPPORTED_CAPABILITY' | 'MODEL_IMAGES_UNSUPPORTED';
 
 /** Model provenance and usage for one model-backed step. */
 export interface StepModelInfo {

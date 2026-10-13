@@ -48,11 +48,27 @@ remaining test timeout.
 must be positive integers no larger than the configured limits; a larger one
 is `INVALID_ARGUMENT`. All durations are in milliseconds.
 
+The built-in acting loop and supported tool-loop helpers reserve model-call admission
+before transport, including concurrent helper calls sharing a step. Results
+record accepted usage once; image rejections still consume the existing request
+budget, and replacements need their own admission. A preflight refusal or
+transport error releases its reservation without inventing accepted usage.
+Caught budget refusals remain fatal. An ended context is `CANCELLED` before
+transport without changing the completed step or aborting its attempt. Opaque
+custom-executor transports remain the executor's responsibility. A stall retry
+that retains its reservation keeps the original model-call start time; its
+duration includes the abandoned request and retry backoff.
+
+Built-in judgments (`assert`, `waitFor`, and `extract`) use separate accounting:
+they count attempted model calls before transport, and a failed transport does
+not release that count.
+
 The `assert` row holds for the built-in agent. When the selected agent has a
 custom `executor`, `assert` is dispatched to it as a step: its budget is the
 agent's `maxSteps` and `maxModelCalls`, its default timeout is
-`config.timeout`, and `vision` on the call is `UNSUPPORTED_CAPABILITY`;
-`screenshot` still applies.
+`config.timeout`. A per-call `vision` option requires the executor to declare
+`vision: true`; otherwise even explicit `vision: false` is
+`UNSUPPORTED_CAPABILITY`. `screenshot` still applies.
 
 ## agent.act
 
@@ -86,6 +102,88 @@ The result carries the step's `summary`, the `modelCalls` and `actions` it
 spent, and `cache`: how the [replay cache](/cache) took part
 (`self-finalized`, `agent-concluded`, or `missed` with a `reason`; absent when
 caching is off).
+
+### Observation policy
+
+Named agents can opt into safe tree-plus-pixel model input:
+
+```ts
+const observationPolicy = { act: 'tree+pixels', judgments: true } as const;
+// Configure agents.visual = { model, observationPolicy }.
+await agent.act('open settings', { agent: 'visual' });
+await agent.act('read the label', { agent: 'visual', observation: 'tree-only' });
+await agent.assert('the label is visible', { agent: 'visual', vision: false });
+```
+
+| Acting `observation` | Model evidence |
+| --- | --- |
+| `'adaptive'`, the default | Existing tree-first loop, with pixels when the model requests them or the tree has no interactive nodes |
+| `'tree+pixels'` | Safe pixels on the first model turn and refreshed after each action and explicit observe |
+| `'tree-only'` | Tree only, no pixel tools or unavailable-tree fallback |
+
+`observationPolicy.act` sets the named-agent default. `act({ observation })`
+overrides it. `observationPolicy.judgments: true` defaults `assert`, `waitFor`,
+and `extract` to tree plus pixels; their `vision: false` overrides stay tree-only.
+Each agent resolves its own policy. Hosted sessions use the same configured
+agents. Deterministic locator steps and debug artifact capture are unchanged.
+
+Neither policy overrides engine withholding, masking proof, secret-fill taint,
+or model image support. Tree-plus-pixel requests degrade to the tree and record
+the reason. Without semantic evidence, or with `vision: 'only'`, they fail
+closed. A model can explicitly declare `supportsImageInput: false`. Otherwise
+its provider determines image support; a confirmed image rejection allows one
+budgeted text-only request with unchanged action history, never action retries.
+Unsupported-image warnings also record degradation. After confirmed image
+support loss, later judgment polls stop optional pixel captures and give the
+semantic tree the text-only input budget. Other provider failures keep their
+existing errors.
+
+Opt-in pixels add capture and encoding latency and provider image tokens on
+every turn, including images retained in context. The existing 768 px cap and
+history compaction still apply. `maxInputTokens`, `maxModelCalls`, and the step
+deadline remain the budgets; tighter limits may stop a step sooner.
+
+For `act` in `'tree+pixels'` mode, the built-in agent and opted-in
+`createToolLoopExecutor` preflight the final prepared provider request before
+every transport call, including permitted text-only replacements. The estimate
+counts UTF-8 bytes of serialized instructions, context, tools, provider hints
+and all message history, including inline image data. Each image also costs
+at least 4,784 byte-scaled units, the existing 2560 by 1440 patch reserve;
+encoded PNG geometry costs more when its 28 px patch count exceeds that reserve.
+Every retained or duplicate image is charged again on every request carrying it.
+Unmeasurable non-inline images fail closed without fetching them.
+
+This is a deterministic conservative estimate, not a portable tokenizer or
+a guarantee of any provider's image billing. A tiny file or the 768 px cap
+is not a request-token limit. When the estimate exceeds `maxInputTokens`,
+`STEP_BUDGET_EXHAUSTED` stops before transport, even if the minimal safe request
+cannot fit. Images are not discarded just to fit, and previously dispatched
+actions are not repeated. Accepted usage remains the provider's reported
+tokens, not this estimate. Adaptive and explicit tree-only acting requests keep
+their existing accounting and request behavior. Measure your model and suite
+before enabling the policy broadly.
+
+The report records actual accepted pixels in `visionInput`, the last
+degradation in `visionDegraded`, and changed pixel decisions as policy events.
+`metrics.pixelBytes` is the largest accepted image; `metrics.modelImageBytes`
+sums accepted image bytes across requests, including resent context.
+Model provenance records calls, tokens, prompt-cache usage, and provider cost
+when reported. Rejected or ignored images do not count as accepted bytes.
+
+Non-default acting modes use separate replay-cache keys. Adaptive keys remain
+unchanged, so existing default recordings remain usable. Switching policy may
+require re-recording under strict cache. A successful replay performs no model
+call and uses no model pixels; live handoff follows the selected policy without
+repeating already committed actions.
+
+Custom executors must declare `observationPolicy: true` to receive
+`step.observation`, and honor its opening, refresh, and tree-only behavior.
+`createToolLoopExecutor({ observationPolicy: true })` adds the model-boundary
+safety, opt-in request preflight and usage reporting, but its prompt and tools must implement that
+behavior. A hand-rolled executor reports accepted images through
+`context.recordPixelInput`. Judgment defaults require `vision: true` on custom
+executors. Without those capabilities, configured or per-call policies fail
+with `UNSUPPORTED_CAPABILITY` instead of silently changing executor input.
 
 ### Action tools
 
@@ -192,7 +290,7 @@ control again.
 
 If semantic capture times out, an engine that proves masking independently
 can return a fresh screenshot with an explicit unavailable-tree warning.
-Every `act` observation with unavailable semantics includes that image and
+Unless `observation: 'tree-only'` is selected, every `act` observation with unavailable semantics includes that image and
 warning automatically. Earlier node ids are invalid, and the next successful
 semantic capture presents the whole tree again. The screenshot shows the
 current viewport; an unavailable tree does not prove that a control or
@@ -211,7 +309,8 @@ without the pointer kind the point must land on a listed control. A
 bare-point tap or hover replays from the [replay cache](/cache) only on a
 viewport of the recorded size, or at the same place inside the listed node
 that contained it. A step that sent pixels records `visionInput: true` and
-`metrics.pixelBytes`.
+`metrics.pixelBytes` (peak image bytes) and `metrics.modelImageBytes`
+(accepted bytes across model requests, including resent context).
 
 A failed or blocked step throws an `AgentError`. A failed verdict is
 `ACTION_FAILED` unless the executor names a more specific code, such as
@@ -266,8 +365,9 @@ executor's explanation alone. No evidence is captured with
 `screenshot` controls failure evidence attached after the judgment; `vision`
 controls what the model is shown before it. A custom `StepExecutor` judges
 the assertion itself: it honors `screenshot`, since the runner takes that
-evidence after the verdict, and rejects `vision` with
-`UNSUPPORTED_CAPABILITY`, since the executor decides what its model sees.
+evidence after the verdict. Per-call `vision` requires the executor's
+`vision: true` capability; otherwise even explicit `vision: false` is
+`UNSUPPORTED_CAPABILITY`. The executor decides what its model sees.
 
 ```ts
 await agent.assert('the dashboard shows a trial badge');
@@ -338,7 +438,7 @@ judge model that accepts images.
 
 | `vision` | Evidence sent to the judge |
 | --- | --- |
-| `false`, the default | Semantic tree |
+| `false`, the default unless configured otherwise | Semantic tree |
 | `true` | Semantic tree and a masked screenshot |
 | `'only'` | Masked screenshot only |
 
@@ -350,7 +450,8 @@ this option.
 Pixels are withheld and the tree sent alone when a secret fill has tainted
 the viewport (`visionDegraded: "PIXEL_TAINTED"` on the step), when the engine
 masked fewer regions than the secure fields it observed (`MASKING_UNPROVEN`),
-or when the engine cannot capture pixels (`UNSUPPORTED_CAPABILITY`). In
+when the engine cannot capture pixels (`UNSUPPORTED_CAPABILITY`), or when the
+model cannot use images (`MODEL_IMAGES_UNSUPPORTED`). In
 `'only'` mode those cases fail with `POLICY_DENIED` instead.
 
 With `vision: true` or `'only'`, a recoverable semantic-capture failure can
@@ -372,6 +473,8 @@ step fails with `MODEL_OUTPUT_INVALID` and its `explanation` is the rejection.
  * Parameters and budgets for one `act` call.
  */
 export interface ActOptions extends AgentOption {
+  /** Override this agent's acting policy for one call. */
+  observation?: 'adaptive' | 'tree-only' | 'tree+pixels';
   /**
    * JSON-safe values the instruction refers to, at most 64 KiB and 32 levels
    * deep. A `Secret` reaches the model by name only; the runner fills it. A

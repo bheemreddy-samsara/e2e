@@ -722,3 +722,22 @@ session.steps().push({} as StepRecord);
 session.tracePath = '/tmp/trace.md';
 // @ts-expect-error closing returns a read-only list of failures
 (await session.close()).push({} as SerializedError);
+
+// Opt-in acting evidence is distinct from judgment vision, and closed.
+const observationPolicy: import('../../src/index.ts').AgentObservationPolicy = { act: 'tree+pixels', judgments: true };
+({ targets, agents: { default: { model, observationPolicy } } }) satisfies E2EConfig;
+await agent.act('safe image first', { observation: 'tree+pixels' });
+await agent.act('no pixels', { observation: 'tree-only' });
+await agent.act('adaptive override', { observation: 'adaptive' });
+await agent.assert('tree evidence', { vision: false });
+await agent.waitFor('tree evidence', { vision: false });
+// @ts-expect-error acting policy has no pixel-only mode
+await agent.act('strict pixels', { observation: 'only' });
+// @ts-expect-error judgments defaults are boolean; strict only remains per-call
+({ targets, agents: { default: { model, observationPolicy: { judgments: 'only' } } } }) satisfies E2EConfig;
+// @ts-expect-error unknown policy keys are rejected
+({ targets, agents: { default: { model, observationPolicy: { pixels: true } } } }) satisfies E2EConfig;
+executorContext.step.observation satisfies import('../../src/index.ts').ActObservationMode | undefined;
+({ name: 'policy-aware', observationPolicy: true, runStep: async () => ({ status: 'passed', summary: 'ok' }) }) satisfies StepExecutor;
+// @ts-expect-error capability is a literal opt-in, not a boolean default
+({ name: 'policy-aware', observationPolicy: false, runStep: async () => ({ status: 'passed', summary: 'ok' }) }) satisfies StepExecutor;

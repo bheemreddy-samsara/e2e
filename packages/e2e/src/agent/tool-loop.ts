@@ -25,6 +25,9 @@ import {
   isForcedToolChoiceDowngraded,
   isForcedToolChoiceRejected,
 } from './model/tool-choice.ts';
+import { pixelRequestPreflight } from './model/pixel-request-budget.ts';
+import { reserveModelCall } from './model/model-call-admission.ts';
+import { withSafePixelInput } from './model/pixel-input.ts';
 import { withStallGuard } from './model/stall.ts';
 import { providerHints, type ProviderHints, type ProviderModelRef } from './model/provider-hints.ts';
 import { isScreenOutput, toolResultTexts } from './screen-update.ts';
@@ -128,6 +131,8 @@ export interface ToolLoopHelpers {
 }
 
 export interface ToolLoopExecutorOptions {
+  /** Opts into step.observation. Your prompt and tools must honor the mode and refresh policy. */
+  readonly observationPolicy?: true;
   readonly name: string;
   readonly version?: string;
   /** AI SDK language model; defaults to the config-resolved `agent.model`. */
@@ -190,6 +195,7 @@ export function createToolLoopExecutor(options: ToolLoopExecutorOptions): StepEx
   }
   return {
     name: options.name,
+    ...(options.observationPolicy === true ? { observationPolicy: true } : {}),
     ...(options.version === undefined ? {} : { version: options.version }),
     ...(options.model === undefined ? {} : { model: options.model }),
     async runStep(context: StepExecutorContext): Promise<StepVerdict> {
@@ -249,6 +255,8 @@ class LoopRun {
   private lastStep: StepResult<ToolSet> | undefined;
   /** `model` as the loop sends requests to it: each one bounded, so a stalled response is sent again. */
   private readonly requestModel: SdkLanguageModel;
+  private readonly tracker: ModelCallTracker;
+  private modelAdmission: (() => void) | undefined;
 
   constructor(
     private readonly ai: AiSdk,
@@ -256,8 +264,39 @@ class LoopRun {
     private readonly context: StepExecutorContext,
     private readonly model: SdkLanguageModel,
   ) {
+    this.tracker = trackModelCalls(context, model);
     this.toolChoice = FREE_TOOL_CHOICE_MODELS.has(model) ? 'auto' : 'required';
-    this.requestModel = withStallGuard(ai, model, (stallMs) => {
+    const pixelModel = options.observationPolicy !== true ? model : withSafePixelInput(ai, model, {
+      preflight: pixelRequestPreflight(context),
+      supported: (context.model as { supportsImageInput?: boolean } | undefined)?.supportsImageInput,
+      permitted: () => !context.pixelsTainted && context.step.observation !== 'tree-only',
+      canDegrade: () => context.treeAvailable !== false,
+      record: (input) => context.recordPixelInput?.(input),
+      rejected: () => {
+        this.releaseModelCall();
+        context.budgets.recordModelCall({ provider: model.provider, modelId: model.modelId });
+      },
+      retry: () => this.startModelCall(),
+    });
+    // SDK lifecycle callbacks swallow exceptions. Admission must throw at transport.
+    const admittedModel = ai.wrapLanguageModel({
+      model: pixelModel,
+      middleware: {
+        wrapGenerate: async ({ params, model: inner }) => {
+          try {
+            this.startModelCall();
+            return await inner.doGenerate(params);
+          } catch (cause) {
+            // The stall signal belongs to this transport generation. An abandoned
+            // attempt cannot release the logical lease its live retry still holds.
+            // Terminal abort/failure cleanup remains in run() outside the stall race.
+            if (params.abortSignal?.aborted !== true) this.releaseModelCall();
+            throw cause;
+          }
+        },
+      },
+    });
+    this.requestModel = withStallGuard(ai, admittedModel, (stallMs) => {
       this.note(`turn ${String(this.turnsUsed + 1)} got no response in ${String(stallMs / 1000)}s: sending it again`);
     });
     this.hints = providerHints(model as ProviderModelRef);
@@ -268,16 +307,31 @@ class LoopRun {
     );
   }
 
+  /** Holds one logical turn across transport retries, not one slot per retry. */
+  private startModelCall(): void {
+    if (this.modelAdmission !== undefined) {
+      // A retained stall lease still needs per-transport liveness checks, not a new timer.
+      this.context.budgets.checkModelCall?.();
+      return;
+    }
+    this.modelAdmission = reserveModelCall(this.context);
+    this.tracker.onStepStart();
+  }
+
+  /** Reconciles a result, rejection, or failed/refused request without accepted-usage inflation. */
+  private releaseModelCall(): void {
+    const release = this.modelAdmission;
+    this.modelAdmission = undefined;
+    release?.();
+  }
+
   async run(): Promise<StepVerdict> {
     const helpers = this.helpers();
     const tools: ToolSet = {
       ...this.options.tools(this.context, helpers),
       complete_step: this.conclusion.tool,
     };
-    const tracker = trackModelCalls(
-      this.context,
-      this.model as { provider?: string; modelId?: string },
-    );
+    const tracker = this.tracker;
     let prompt = await this.options.buildPrompt(this.context);
     for (;;) {
       // Built per attempt: the instructions and the tool-choice mode can
@@ -290,8 +344,8 @@ class LoopRun {
           // The whole loop, retries included, ends with the step's clock; the
           // judgment adapter bounds its calls the same way.
           timeout: Math.max(1, this.context.budgets.remainingMs()),
-          onStepStart: tracker.onStepStart,
           onStepEnd: (step) => {
+            this.releaseModelCall();
             this.lastStep = step;
             this.recordTurn(step);
             tracker.onStepEnd(step);
@@ -305,6 +359,7 @@ class LoopRun {
         }
         break;
       } catch (cause) {
+        this.releaseModelCall();
         const shrunk = this.overflowRetry(cause);
         if (shrunk !== undefined) {
           prompt = shrunk;

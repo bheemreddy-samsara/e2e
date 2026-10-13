@@ -141,7 +141,7 @@ export function createAgentFixture(runtime: AgentContext): Agent {
       rejectUnknownOptions('agent.waitFor', options, WAIT_FOR_KEYS);
       const intervalMs = validateInterval(options?.interval);
       const { config } = runtime.select(options?.agent);
-      const vision = resolveVision(options?.vision);
+      const vision = resolveVision(options?.vision, config.observationPolicy.judgments);
       return step(
         {
           api: 'agent.waitFor',
@@ -178,7 +178,7 @@ export function createAgentFixture(runtime: AgentContext): Agent {
       requireStandardSchema(options?.schema, 'schema');
       const schema = options.schema;
       const { config } = runtime.select(options.agent);
-      const vision = resolveVision(options.vision);
+      const vision = resolveVision(options.vision, config.observationPolicy.judgments);
       return step(
         {
           api: 'agent.extract',
@@ -246,7 +246,7 @@ export function createAgentFixture(runtime: AgentContext): Agent {
       if (customExecutor) {
         return runAssertStep(runtime, assertion, options);
       }
-      const vision = resolveVision(options?.vision);
+      const vision = resolveVision(options?.vision, config.observationPolicy.judgments);
       return step(
         {
           api: 'agent.assert',

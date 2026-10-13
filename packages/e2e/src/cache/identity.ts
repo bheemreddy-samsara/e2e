@@ -66,6 +66,8 @@ export interface CacheAgentIdentity {
   readonly name: string;
   /** The context the agent reads, already redacted. */
   readonly context: string | undefined;
+  /** Non-default acting observation policy; adaptive omits it to preserve old keys. */
+  readonly observation?: 'tree-only' | 'tree+pixels';
 }
 
 /** Identity of the target/engine/app a trace was recorded against. */
@@ -187,7 +189,7 @@ export function buildTraceCacheKey(parts: {
     appIdentity: parts.target.appIdentity,
     agent: parts.agent.name,
     agentContextDigest: sha256Hex(parts.agent.context ?? ''),
-    policyVersion: parts.policyVersion,
+    policyVersion: parts.agent.observation === undefined ? parts.policyVersion : `${parts.policyVersion}/observation:${parts.agent.observation}`,
   };
 }
 

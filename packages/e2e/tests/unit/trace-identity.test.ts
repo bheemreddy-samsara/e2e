@@ -61,6 +61,14 @@ describe('traceCacheKeyHash', () => {
     policyVersion: 'replay-policy/0',
   };
 
+  it('isolates non-default observation policies while preserving the pinned adaptive key', () => {
+    const adaptive = traceCacheKeyHash(buildTraceCacheKey(parts));
+    const pixels = traceCacheKeyHash(buildTraceCacheKey({ ...parts, agent: { ...parts.agent, observation: 'tree+pixels' } }));
+    const tree = traceCacheKeyHash(buildTraceCacheKey({ ...parts, agent: { ...parts.agent, observation: 'tree-only' } }));
+    expect(new Set([adaptive, pixels, tree]).size).toBe(3);
+    expect(adaptive).toBe('a108ef464ccf8c316bc7ae7766c586eae6a3bb2cc482654246854e58793c070a');
+  });
+
   it('is stable for identical parts', () => {
     const hash = traceCacheKeyHash(buildTraceCacheKey(parts));
     expect(hash).toMatch(/^[a-f0-9]{64}$/);

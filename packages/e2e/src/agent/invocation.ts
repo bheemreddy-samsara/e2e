@@ -171,7 +171,7 @@ export class Invocation {
   private visionInput = false;
   private visionDegraded: VisionDegradation | undefined;
   /** Whether this invocation asks for pixel evidence. */
-  private readonly pixelTier: boolean;
+  private pixelTier: boolean;
   /** Byte size of the invariant system message, measured once. */
   private readonly systemBytes: number;
   /** Byte size of the caller's instruction as the prompt carries it, measured once. */
@@ -256,7 +256,7 @@ export class Invocation {
       guard: (cause) => this.checkDeadline(cause),
       signal: this.runtime.engine.signal,
       api: this.options.api,
-      fallback: this.options.vision !== false,
+      fallback: this.options.vision !== false && this.agent.config.judge?.model.supportsImageInput !== false,
       tainted: () => this.runtime.exposure.withholdsPixels,
     });
   }
@@ -268,6 +268,11 @@ export class Invocation {
    */
   private pixelsRequested(): boolean {
     if (!this.pixelTier) return false;
+    if (this.agent.config.judge?.model.supportsImageInput === false) {
+      this.loseVision('MODEL_IMAGES_UNSUPPORTED');
+      this.pixelTier = false;
+      return false;
+    }
     if (this.runtime.exposure.withholdsPixels) {
       this.loseVision('PIXEL_TAINTED');
       return false;
@@ -282,9 +287,7 @@ export class Invocation {
       this.loseVision(outcome.withheld);
       return;
     }
-    this.visionInput = true;
-    this.metrics.pixelBytes = Math.max(this.metrics.pixelBytes ?? 0, outcome.pixels.data.byteLength);
-    this.recordPolicy('vision.pixels', 'allowed');
+    // The model boundary records actual image use, not this capture.
   }
 
   /**
@@ -295,6 +298,7 @@ export class Invocation {
    * from the tree the caller deliberately excluded, so it fails instead.
    */
   private loseVision(code: VisionDegradation): void {
+    if (code === 'MODEL_IMAGES_UNSUPPORTED') this.pixelTier = false;
     if (this.visionDegraded !== code) {
       this.visionDegraded = code;
       this.recordPolicy('vision.pixels', 'denied', code);
@@ -363,6 +367,22 @@ export class Invocation {
               system: this.system,
               prompt,
               ...(images === undefined ? {} : { images }),
+              pixelInput: {
+                supported: this.agent.config.judge?.model.supportsImageInput,
+                permitted: () => !this.runtime.exposure.withholdsPixels,
+                canDegrade: () => !this.treeWithheld && request.prompt.observation?.kind !== 'pixels',
+                record: (input) => {
+                  if (input.degraded !== undefined) this.loseVision(input.degraded);
+                  if (input.bytes !== undefined) {
+                    this.visionInput = true;
+                    this.metrics.pixelBytes = Math.max(this.metrics.pixelBytes ?? 0, input.peakBytes ?? input.bytes);
+                    this.metrics.modelImageBytes = (this.metrics.modelImageBytes ?? 0) + input.bytes;
+                    this.recordPolicy('vision.pixels', 'allowed');
+                  }
+                },
+                rejected: () => undefined,
+                retry: () => this.consumeModelCall(),
+              },
               schemaName: request.schemaName,
               schema: request.schema,
               validate: request.validate,

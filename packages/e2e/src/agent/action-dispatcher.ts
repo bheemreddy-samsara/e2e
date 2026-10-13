@@ -253,13 +253,17 @@ export class ActionDispatcher {
         this.accounting.reserveAction();
         this.options.trace()?.recordGap(call.name);
       }
-      const value = await instrumentPhase(
-        this.runtime,
-        { api: this.accounting.api, kind: 'engine', phase: 'agent.action', name: `${PROJECT_TOOL_EVENT_PREFIX}${call.name}` },
-        body,
-      );
-      if (call.mutates) this.armAfter('tool');
-      return value;
+      try {
+        return await instrumentPhase(
+          this.runtime,
+          { api: this.accounting.api, kind: 'engine', phase: 'agent.action', name: `${PROJECT_TOOL_EVENT_PREFIX}${call.name}` },
+          body,
+        );
+      } finally {
+        // A dispatched tool may commit before failing. The next observation
+        // must settle that possible change without redispatching the tool.
+        if (call.mutates) this.armAfter('tool');
+      }
     };
     return call.mutates ? this.queue.run(run) : run();
   }

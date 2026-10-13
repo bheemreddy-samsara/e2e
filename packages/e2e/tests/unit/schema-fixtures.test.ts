@@ -35,6 +35,23 @@ describe.each(schemas)('%s schema', (name) => {
   });
 
   if (name === 'report-v1') {
+    it('keeps illustrative accepted-pixel fields optional without cross-field implications', () => {
+      const report = readJson('fixtures', 'report-v1.valid.json') as {
+        run: { results: { attempts: { steps: Record<string, unknown>[] }[] }[] };
+      };
+      const step = report.run.results[0]!.attempts[0]!.steps[0]!;
+      const metrics = step['metrics'] as Record<string, unknown>;
+      expect(step['visionInput']).toBe(true);
+      expect(metrics['pixelBytes']).toBe(1024);
+      expect(metrics['modelImageBytes']).toBe(1024);
+      expect(step['visionDegraded']).toBeDefined();
+      delete step['visionInput'];
+      delete metrics['pixelBytes'];
+      expect(validate(report)).toBe(true);
+      delete metrics['modelImageBytes'];
+      expect(validate(report)).toBe(true);
+    });
+
     it("bounds what a step tells and what the app logged: a log line's source and level, a hook phase, and the cache detail, entry, and write", () => {
       const report = readJson('fixtures', 'report-v1.valid.json') as {
         run: { results: { attempts: (Record<string, unknown> & { steps: Record<string, unknown>[] })[] }[] };
