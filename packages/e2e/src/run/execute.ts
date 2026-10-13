@@ -56,6 +56,7 @@ import { runSerialUnit, type SerialAttemptRun, type SerialAttemptStart, type Ser
 import { interruptedSkip, pairKey, pairResult, unstartedResult } from './units.ts';
 import { adoptSecrecy, carriedSecrecy, processSecrets, registerDerivedSecrets, redactForSession, resolveSecretValue, sessionSecrecy, staticSecretLedger } from './secrecy.ts';
 import { isSecret } from '../secrets.ts';
+import { VideoDiscard } from './video-discard.ts';
 import { SessionStaging, SessionStore, targetIdentity, type SessionIdentity } from './sessions.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
 import { EngineError } from '../engine/contract.ts';
@@ -143,6 +144,12 @@ type AttemptPhase = 'launch' | 'beforeEach' | 'body' | 'afterEach';
  * reports.
  */
 export interface ClosingRecord {
+  /** Hosted sessions decide retention after engine cleanup, including its newly recorded failures. */
+  readonly videoRetentionStatus?: () => AttemptRecord['status'];
+  /** Hosted owner finalizes retention before rendering trace metadata, then recovers video if publication fails. */
+  finalizeVideo?: () => Promise<void>;
+  /** Releases private recovery links after hosted trace publication has settled. */
+  releaseVideo?: () => Promise<void>;
   readonly status: AttemptRecord['status'];
   cleanup: AttemptRecord['cleanup'];
 }
@@ -720,17 +727,41 @@ export class TargetExecutor implements SerialHost {
   ): Promise<void> {
     const { attemptId, video } = close;
     const { stopVideo } = session.artifacts;
+    let retainVideo: (() => Promise<void>) | undefined;
     if (stopVideo !== undefined && video !== undefined) {
-      await this.stopVideo(video, attemptId, record, secondaryErrors, async (operation) => {
-        const segments = await stopVideo(operation);
-        // Recorded so a failure could be looked at; a pass has nothing to show.
-        if (!keeps(video.keep, record.status)) {
-          await Promise.all(
-            segments.flatMap((segment) => ('path' in segment ? [rm(path.join(artifactSink.dir, segment.path), { force: true })] : [])),
-          );
-          return;
+      await this.stopVideo(video, attemptId, record, secondaryErrors, async (recordingOperation) => {
+        const segments = await stopVideo(recordingOperation);
+        recordingOperation.signal.throwIfAborted();
+        let registered = false;
+        const discarded = record.videoRetentionStatus === undefined ? undefined : new VideoDiscard(artifactSink.dir);
+        if (discarded !== undefined) record.releaseVideo = async () => {
+          // Maintenance cannot hold close forever or retire a worker after publication.
+          try {
+            await withScopedBudget(this.config.cleanupTimeout, NEVER_ABORTS,
+              () => new InfrastructureError('CLEANUP_TIMEOUT', 'releasing video recovery timed out'),
+              (signal) => discarded.release(signal));
+          } catch { /* Keep any remaining private recovery files. */ }
+        };
+        const retain = async (operation: OperationContext, final = false): Promise<void> => {
+          if (!keeps(video.keep, record.videoRetentionStatus?.() ?? record.status)) {
+            if (record.videoRetentionStatus !== undefined && !final) return;
+            await Promise.all(
+              segments.flatMap((segment) => ('path' in segment
+                ? [discarded === undefined ? rm(path.join(artifactSink.dir, segment.path), { force: true }) : discarded.discard(path.join(artifactSink.dir, segment.path), operation.signal)]
+                : [])),
+            );
+            return;
+          }
+          await discarded?.restore(operation.signal);
+          operation.signal.throwIfAborted();
+          if (!registered) { registered = true; registerVideos(artifactSink, segments); }
+        };
+        if (record.videoRetentionStatus === undefined) await retain(recordingOperation);
+        else {
+          // Deferred retention keeps the recording's cleanup budget and best-effort/required policy.
+          retainVideo = () => this.stopVideo(video, attemptId, record, secondaryErrors, async (operation) => { await retain(operation); });
+          record.finalizeVideo = () => this.stopVideo(video, attemptId, record, secondaryErrors, async (operation) => { await retain(operation, true); });
         }
-        registerVideos(artifactSink, segments);
       });
     }
     try {
@@ -739,6 +770,7 @@ export class TargetExecutor implements SerialHost {
       record.cleanup = 'failed';
       secondaryErrors.push(serializeError(classifyError(cause), { phase: 'cleanup' }));
     }
+    if (retainVideo !== undefined) await retainVideo();
   }
 
   /**

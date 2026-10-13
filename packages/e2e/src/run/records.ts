@@ -6,6 +6,7 @@ import type { TestIdentity } from '../collect/collect.ts';
 import type { SkipInfo } from '../collect/select.ts';
 import { keeps, type Keep } from '../internal/recording-modes.ts';
 import type { ResolvedTarget } from '../config/resolve.ts';
+import type { HostedSessionOutcome } from './hosted-outcome.ts';
 import type { AppLogRecord, StepRecord } from './steps.ts';
 
 export type ArtifactProducer = { kind: 'step'; stepId: string } | { kind: 'attempt' };
@@ -65,6 +66,8 @@ export interface FailureEvidence {
 }
 
 export interface AttemptRecord {
+  /** Hosted-session sources and effective verdict, independent of export mechanisms. */
+  hostedOutcome?: HostedSessionOutcome;
   id: string;
   index: number;
   status: AttemptStatus;

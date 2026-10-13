@@ -722,3 +722,20 @@ session.steps().push({} as StepRecord);
 session.tracePath = '/tmp/trace.md';
 // @ts-expect-error closing returns a read-only list of failures
 (await session.close()).push({} as SerializedError);
+
+// Hosted outcome metadata is closed and typed; it never accepts native errors.
+void (session.close({ outcome: { actual: 'failed', expected: 'failed', retryIndex: 1, testId: 'checkout' } }) satisfies Promise<readonly SerializedError[]>);
+void (session.outcome() satisfies import('../../src/runner.ts').HostedSessionOutcome | undefined);
+void ({ outcome: { actual: 'skipped' } } satisfies import('../../src/runner.ts').CloseSessionOptions);
+void ({ actual: 'timed-out' } satisfies import('../../src/runner.ts').ExternalOutcome);
+void ('interrupted' satisfies import('../../src/runner.ts').ExternalStatus);
+// @ts-expect-error external status is a closed vocabulary
+void session.close({ outcome: { actual: 'broken' } });
+// @ts-expect-error native errors and causes are not metadata
+void session.close({ outcome: { actual: 'failed', error: new Error('private') } });
+// @ts-expect-error expected status is not an arbitrary annotation
+void session.close({ outcome: { actual: 'failed', expected: true } });
+// @ts-expect-error retry index is numeric
+void session.close({ outcome: { actual: 'failed', retryIndex: '1' } });
+// @ts-expect-error external identity is a string
+void session.close({ outcome: { actual: 'failed', testId: ['checkout'] } });

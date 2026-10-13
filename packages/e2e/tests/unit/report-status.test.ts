@@ -10,6 +10,7 @@ import type { SerializedError } from '../../src/internal/errors.ts';
 import { uuidv7 } from '../../src/internal/ids.ts';
 import { buildReport, type BuildReportOptions } from '../../src/report/build.ts';
 import type { AttemptRecord, ResultRecord, SerialAttemptRecord, SerialGroupRecord } from '../../src/run/records.ts';
+import { hostedOutcome, parseCloseOutcome, type ExternalOutcome } from '../../src/run/hosted-outcome.ts';
 import type { StepRecord } from '../../src/run/steps.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
 
@@ -295,5 +296,50 @@ describe('run limits', () => {
       maxEventsPerStep: 1_000,
       maxModelTokensPerCall: 64_000,
     });
+  });
+});
+
+describe('hosted report outcome sources', () => {
+  it.each([
+    { actual: 'failed' }, { actual: 'timed-out' }, { actual: 'skipped' },
+    { actual: 'failed', expected: 'failed', retryIndex: 1, testId: 'suite/checkout' },
+    { actual: 'passed', expected: 'failed' },
+  ] satisfies ExternalOutcome[])('serializes %j without inventing SDK errors', (external) => {
+    const result = failedResult(productFailure);
+    const attempt = result.attempts[0]!;
+    delete attempt.error;
+    const effective = hostedOutcome('passed', external);
+    attempt.hostedOutcome = effective;
+    attempt.status = effective.status;
+    result.status = effective.status;
+    if (effective.status === 'skipped') {
+      attempt.skip = { cause: 'explicit', reason: 'external runner skip' };
+      result.skip = attempt.skip;
+    }
+    const document = build({ results: [result] });
+    expect(document.run.results[0]!.attempts[0]!.hostedOutcome).toEqual(effective);
+    expect(document.run.results[0]!.attempts[0]!.error).toBeUndefined();
+  });
+
+  it('serializes the same identity-withheld projection without losing external verdict or retry facts', () => {
+    const external = parseCloseOutcome({ outcome: { actual: 'failed', expected: 'failed', retryIndex: 3, testId: 'private-identity' } }, () => undefined);
+    const effective = hostedOutcome('passed', external);
+    const result = failedResult(productFailure);
+    const attempt = result.attempts[0]!;
+    delete attempt.error;
+    attempt.hostedOutcome = effective;
+    const document = build({ results: [result] });
+    expect(document.run.results[0]!.attempts[0]!.hostedOutcome).toEqual(effective);
+    expect(effective).toEqual({ status: 'failed', sdkStatus: 'passed', unexpected: false,
+      external: { actual: 'failed', expected: 'failed', retryIndex: 3 } });
+    expect(JSON.stringify(document)).not.toContain('private-identity');
+  });
+
+  it('keeps SDK errors alongside an external pass', () => {
+    const result = failedResult(productFailure);
+    result.attempts[0]!.hostedOutcome = hostedOutcome('failed', { actual: 'passed' });
+    const attempt = build({ results: [result] }).run.results[0]!.attempts[0]!;
+    expect(attempt.hostedOutcome).toMatchObject({ status: 'failed', sdkStatus: 'failed', unexpected: true, external: { actual: 'passed' } });
+    expect(attempt.error?.code).toBe('ASSERTION_FAILED');
   });
 });

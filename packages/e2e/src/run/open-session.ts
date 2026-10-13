@@ -8,6 +8,7 @@ import { allocateTargetPorts } from './app-ports.ts';
 import { processSecrets, registerStaticSecrets } from './secrecy.ts';
 import { selectTarget } from './select-target.ts';
 import { openStandaloneHost } from './standalone.ts';
+import type { CloseSessionOptions, HostedSessionOutcome } from './hosted-outcome.ts';
 import type { StepProgress, StepRecord } from './steps.ts';
 
 export interface OpenHostOptions {
@@ -59,8 +60,10 @@ export interface E2ESession<Fixtures extends object = Record<string, unknown>> e
   /** Absolute per-session trace path. Written before close settles successfully. */
   readonly tracePath: string;
   steps(): readonly StepRecord[];
-  /** Idempotent. Returns soft assertion, abandoned-operation, and cleanup failures. Disposal throws them as AggregateError. */
-  close(): Promise<readonly SerializedError[]>;
+  /** Final effective outcome, available after close settles. SDK errors remain in close's result and steps. */
+  outcome(): HostedSessionOutcome | undefined;
+  /** First call wins. Invalid metadata still closes, returning INVALID_CONFIG among SDK failures. */
+  close(options?: CloseSessionOptions): Promise<readonly SerializedError[]>;
 }
 
 /** Opens the worker-scoped owner of preparation, app processes, and engine initialization. */
@@ -98,7 +101,7 @@ async function openHostWorker<Fixtures extends object>(options: OpenHostOptions)
         runId: attempt.runId, attemptId: attempt.attemptId, target: target.name,
         fixtures: attempt.fixtures as TestFixtures & Fixtures,
         artifactsDir: attempt.artifactsDir, tracePath: attempt.tracePath,
-        steps: () => attempt.steps.all(), close: attempt.close,
+        steps: () => attempt.steps.all(), close: attempt.close, outcome: attempt.outcome,
         [Symbol.asyncDispose]: () => dispose(attempt.close, 'session'),
       };
     }),

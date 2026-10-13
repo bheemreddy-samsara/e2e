@@ -7,6 +7,7 @@
 - Output
 - Exit codes
 - Continuous integration
+- Hosted runners
 
 ## Commands
 
@@ -231,3 +232,47 @@ jobs:
   (`AI_GATEWAY_API_KEY` for `gateway()` from `ai`) as a secret in the run
   step's `env`, and commit `.e2e/cache/` so recorded steps replay with no
   model call.
+
+## Hosted runners
+
+Use `openHost` from `e2e/runner` for another test runner, then
+`host.openSession({ name })` per test attempt. Close before opening the
+next. Supply external facts through
+`session.close({ outcome: { actual: 'failed', expected: 'passed', retryIndex: 0, testId: 'checkout/pay' } })`.
+Actual and expected use `passed`, `failed`, `timed-out`, `skipped`, or
+`interrupted`; expected defaults to passed. Retry index is a nonnegative
+safe integer. Test identity is an optional redacted string of 1-256 UTF-16
+code units. With any provider-backed secret configured, identity is omitted
+from retained facts, `outcome()`, and trace before any temporary-file writes.
+Even resolved providers can return fresh values on later calls; close never
+invokes a provider just for identity. Without providers, stable IDs remain
+and literal or environment secrets are redacted. No errors, causes, getters,
+or arbitrary metadata.
+
+The first close wins; invalid metadata adds a generic `INVALID_CONFIG`
+failure but still closes. Check returned SDK failures separately from your
+runner's assertion result. After close, `session.outcome()` gives a frozen
+effective status, unexpected flag, SDK status, and external facts. SDK
+failures always remain unexpected. Otherwise matching expected outcomes
+and skips are not unexpected; unexpected passes become failures.
+Failure-only video follows that effective policy, including SDK cleanup
+failures. Each external retry opens a new session; retry index is metadata,
+not a retry loop or a recording/cache-mode override.
+Close finishes video retention and any worker retirement before publishing
+trace metadata, or safely fences retention after cleanup cancellation. A
+timed-out transaction starts no further destructive work or registration and
+keeps its recovery inodes private. Already-issued OS calls can still finish;
+this is not physical filesystem cancellation. Optional caller identity is
+withheld as above even if a publication failure triggers later recovery and disposal. A trace publication
+failure retains local video as an SDK failure, even if its deletion had already succeeded.
+Recovery uses a no-clobber hardlink to the original inode, not a byte copy.
+Discard claims the producer path privately before unlinking. A replacement
+captured by the rename stays private and is never deleted. A replacement recreated
+by the producer after the rename stays at the public path, preserved but not
+registered as the original recording. Recovery never overwrites a new destination;
+it preserves that public file and the complete private original recovery inode. If restoration
+fails, the complete video remains private under `.video-recovery-*` in the
+attempt directory, unregistered and unexported. Private cleanup is best-effort
+within the existing cleanup budget; stalls can leave empty staging directories
+as well as recovery files. It cannot retire the worker after metadata publication.
+Read `docs/reference/runner.mdx` for the full lifecycle contract.

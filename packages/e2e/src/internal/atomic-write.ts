@@ -9,7 +9,7 @@
 
 import { randomBytes } from 'node:crypto';
 import { renameSync, unlinkSync, writeFileSync } from 'node:fs';
-import { rename, unlink, writeFile } from 'node:fs/promises';
+import { lstat, open, rename, unlink, writeFile } from 'node:fs/promises';
 
 export interface AtomicWriteOptions {
   /** Mode for a file created by the write; the platform default when absent. */
@@ -50,4 +50,40 @@ export function writeFileAtomicSync(filePath: string, content: string, options: 
     }
     throw cause;
   }
+}
+
+/** A writable destination reserved without putting any document bytes on disk. */
+export interface PreparedFileWrite {
+  publish(content: string): Promise<void>;
+  discard(): Promise<void>;
+}
+
+/**
+ * Reserves a sibling file before destructive artifact cleanup. Document bytes
+ * are supplied only at publication, once cleanup's secret ledger is final.
+ */
+export async function prepareFileAtomic(filePath: string): Promise<PreparedFileWrite> {
+  const destination = await lstat(filePath).catch((cause: NodeJS.ErrnoException) => {
+    if (cause.code === 'ENOENT') return undefined;
+    throw cause;
+  });
+  if (destination?.isDirectory()) throw new Error('report destination is a directory');
+  const temporary = temporaryPath(filePath);
+  const file = await open(temporary, 'wx');
+  const discard = async (): Promise<void> => {
+    await file.close().catch(() => undefined);
+    await unlink(temporary).catch(() => undefined);
+  };
+  return {
+    async publish(content) {
+      try {
+        await file.writeFile(content, 'utf8');
+        await file.close();
+        await rename(temporary, filePath);
+      } finally {
+        await discard();
+      }
+    },
+    discard,
+  };
 }

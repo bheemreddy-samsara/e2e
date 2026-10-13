@@ -380,6 +380,29 @@
         }
       ]
     },
+    "externalStatus": { "enum": ["passed", "failed", "timed-out", "skipped", "interrupted"] },
+    "externalOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["actual"],
+      "properties": {
+        "actual": { "$ref": "#/$defs/externalStatus" },
+        "expected": { "$ref": "#/$defs/externalStatus" },
+        "retryIndex": { "type": "integer", "minimum": 0, "maximum": 9007199254740991 },
+        "testId": { "type": "string", "minLength": 1, "maxLength": 256 }
+      }
+    },
+    "hostedOutcome": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["status", "unexpected", "sdkStatus"],
+      "properties": {
+        "status": { "$ref": "#/$defs/externalStatus" },
+        "unexpected": { "type": "boolean" },
+        "sdkStatus": { "$ref": "#/$defs/externalStatus" },
+        "external": { "$ref": "#/$defs/externalOutcome" }
+      }
+    },
     "attempt": {
       "type": "object",
       "additionalProperties": false,
@@ -390,6 +413,7 @@
         "status": { "enum": ["passed", "failed", "timed-out", "interrupted", "skipped"] },
         "startedAt": { "$ref": "#/$defs/timestamp" },
         "durationMs": { "type": "integer", "minimum": 0 },
+        "hostedOutcome": { "$ref": "#/$defs/hostedOutcome" },
         "steps": { "type": "array", "items": { "$ref": "#/$defs/step" } },
         "appLog": { "type": "array", "maxItems": 300, "items": { "$ref": "#/$defs/appLogLine" } },
         "artifacts": { "type": "array", "items": { "$ref": "#/$defs/artifact" } },

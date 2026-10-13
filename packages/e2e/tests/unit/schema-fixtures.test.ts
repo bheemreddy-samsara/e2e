@@ -35,6 +35,25 @@ describe.each(schemas)('%s schema', (name) => {
   });
 
   if (name === 'report-v1') {
+    it('bounds hosted metadata independently of SDK errors', () => {
+      const report = readJson('fixtures', 'report-v1.valid.json') as {
+        run: { results: { attempts: Record<string, unknown>[] }[] };
+      };
+      const attempt = report.run.results[0]!.attempts[0]!;
+      const valid = attempt['hostedOutcome'] as { external: Record<string, unknown> };
+      for (const bad of [
+        { actual: 'native-status' }, { expected: true }, { retryIndex: -1 },
+        { retryIndex: 0.1 }, { retryIndex: Number.MAX_SAFE_INTEGER + 1 },
+        { testId: '' }, { testId: 'x'.repeat(257) }, { error: {} }, { cause: {} },
+      ]) {
+        attempt['hostedOutcome'] = { ...valid, external: { ...valid.external, ...bad } };
+        expect(validate(report)).toBe(false);
+      }
+      attempt['hostedOutcome'] = valid;
+      expect(validate(report)).toBe(true);
+      delete attempt['hostedOutcome'];
+      expect(validate(report)).toBe(true);
+    });
     it("bounds what a step tells and what the app logged: a log line's source and level, a hook phase, and the cache detail, entry, and write", () => {
       const report = readJson('fixtures', 'report-v1.valid.json') as {
         run: { results: { attempts: (Record<string, unknown> & { steps: Record<string, unknown>[] })[] }[] };

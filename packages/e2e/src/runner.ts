@@ -11,4 +11,5 @@
 export { ConfigurationError, isE2EError, type SerializedError } from './internal/errors.ts';
 export { list, type ListOptions, type ListResult, type ListedPair } from './run/runner.ts';
 export { openHost, type E2EHost, type E2ESession, type OpenHostOptions, type OpenSessionOptions } from './run/open-session.ts';
+export type { CloseSessionOptions, ExternalOutcome, ExternalStatus, HostedSessionOutcome } from './run/hosted-outcome.ts';
 export type { StepProgress, StepRecord } from './run/steps.ts';

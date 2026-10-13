@@ -63,7 +63,18 @@
                 },
                 "artifacts": []
               }
-            ]
+            ],
+            "hostedOutcome": {
+              "status": "failed",
+              "unexpected": true,
+              "sdkStatus": "failed",
+              "external": {
+                "actual": "failed",
+                "expected": "passed",
+                "retryIndex": -1,
+                "testId": "checkout"
+              }
+            }
           }
         ]
       }

@@ -470,6 +470,18 @@ export function renderTracePage(report: Report1Document, result: ReportResult, f
   const ranOn = Object.entries(told.environment ?? {});
   if (ranOn.length > 0) lines.push(`Ran on: ${ranOn.map(([name, value]) => `${cell(name, MAX_ID_CHARS)} ${code(value, MAX_CELL_CHARS)}`).join(' · ')}`, '');
 
+  const hosted = told.hostedOutcome;
+  if (hosted !== undefined) {
+    lines.push('## Session outcome', '', `Effective: **${STATUS_WORD[hosted.status]}**, ${hosted.unexpected ? 'unexpected' : 'not unexpected'}.  `, `SDK: **${STATUS_WORD[hosted.sdkStatus]}**.  `);
+    const external = hosted.external;
+    if (external !== undefined) {
+      lines.push(`External: **${STATUS_WORD[external.actual]}**, expected **${STATUS_WORD[external.expected ?? 'passed']}**.  `);
+      if (external.testId !== undefined) lines.push(`External test: ${code(external.testId, 256)}  `);
+      if (external.retryIndex !== undefined) lines.push(`External retry index: ${external.retryIndex}  `);
+    }
+    lines.push('');
+  }
+
   const error = told.error;
   if (error !== undefined) {
     const phase = error.phase === undefined || error.phase === 'body' ? '' : ` in ${cell(error.phase, MAX_ID_CHARS)}`;
@@ -479,7 +491,7 @@ export function renderTracePage(report: Report1Document, result: ReportResult, f
     const spelled = expected !== undefined && observed !== undefined && error.message.includes(expected) && error.message.includes(observed);
     if (!spelled) for (const line of detailLines(error)) lines.push(`${line}  `);
   } else if (result.status !== 'passed') {
-    lines.push(`_${STATUS_WORD[result.status]}: no error was recorded._`);
+    lines.push(hosted?.external !== undefined ? '_External runner outcome; no external error payload is accepted._' : `_${STATUS_WORD[result.status]}: no error was recorded._`);
   }
   if (result.status !== 'passed') lines.push(`Look at: ${sourceText(failureSource(result, told), options.sourceUrl)}  `);
   if (told.status !== 'skipped' && told.skip !== undefined) lines.push(`Also skipped: ${cell(told.skip.reason)}  `);

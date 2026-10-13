@@ -190,6 +190,11 @@ async function openWorker(options: StandaloneHostOptions, kind: AttemptKind): Pr
       state = { phase: 'retired' };
       hostEnd.abort();
       await teardown();
+    }, async ({ cleanup }) => {
+      if (cleanup === 'complete') return;
+      // Keep state live until the attempt's trace and retention finish, so close/open cannot race them.
+      hostEnd.abort();
+      await teardown();
     }).then(
       (attempt) => {
         state = { phase: 'live', attempt };

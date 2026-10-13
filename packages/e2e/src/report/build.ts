@@ -209,6 +209,7 @@ interface ReportAttemptBase {
 }
 
 export interface ReportAttempt extends ReportAttemptBase {
+  hostedOutcome?: AttemptRecord['hostedOutcome'] | undefined;
   steps: readonly ReportStep[];
   /** What the app logged during the attempt, each line with the index of its step; absent when it logged nothing. */
   appLog?: readonly AppLogRecord[] | undefined;
@@ -468,6 +469,7 @@ function serializeAttemptBase(attempt: AttemptRecord | SerialAttemptRecord): Rep
 function serializeAttempt(attempt: AttemptRecord): ReportAttempt {
   return {
     ...serializeAttemptBase(attempt),
+    ...(attempt.hostedOutcome === undefined ? {} : { hostedOutcome: attempt.hostedOutcome }),
     ...(attempt.failure === undefined ? {} : { failure: attempt.failure }),
     ...(attempt.skip === undefined ? {} : { skip: attempt.skip }),
     steps: attempt.steps.map(serializeStep),

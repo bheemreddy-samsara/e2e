@@ -211,6 +211,16 @@ appeared, or that a redaction withheld, is recorded without them. Check for
 `path` before reading. A video a hosted service keeps has an `http(s)` `url`
 in place of `path`.
 
+### Hosted outcome metadata
+
+An attempt may include `hostedOutcome` with `status`, `unexpected`,
+`sdkStatus`, and optional `external` facts. External facts contain
+`actual` and optional `expected`, `retryIndex`, and `testId`. Redaction may
+omit `testId`. SDK errors remain in the attempt's error fields and steps, never merged with external
+errors. See [External outcomes](/reference/runner#external-outcomes) for
+status mapping, bounds, and retention policy. Ordinary runner attempts
+omit this block.
+
 ## What `--reporter` does to reporter objects
 
 `--reporter` replaces only the built-in reporters; configured reporter

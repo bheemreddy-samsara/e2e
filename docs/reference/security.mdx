@@ -158,6 +158,7 @@ on.
 | Minimum length | A static value shorter than 6 characters is `INVALID_CONFIG`. A provider that returns one fails the fill. |
 | Assertions | Unaffected. Redaction rewrites only what the runner reports. |
 | Cache entries | Secret values and their cut parts never enter them. |
+| Hosted external identity | Optional close-outcome `testId` is omitted whenever the config includes a provider-backed secret, even one already resolved. Providers can yield new values during recovery or disposal; omission precedes all trace writes, including temporary files. Literal and environment secrets are redacted when no provider is configured. |
 
 ## Where redaction stops
 

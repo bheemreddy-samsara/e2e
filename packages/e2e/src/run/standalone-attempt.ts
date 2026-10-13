@@ -18,7 +18,9 @@ import { createAttemptArtifacts, resultSegment } from './artifacts.ts';
 import { AttemptBudget } from './budget.ts';
 import { classifyAttemptStatus, type ClosingRecord, type TargetExecutor } from './execute.ts';
 import { createFixtures } from './fixtures.ts';
-import { writeHostTrace } from './host-trace.ts';
+import { hostedOutcome, parseCloseOutcome, type CloseSessionOptions, type ExternalOutcome, type HostedSessionOutcome } from './hosted-outcome.ts';
+import { renderHostTrace } from './host-trace.ts';
+import { prepareTextReport } from '../report/write.ts';
 import type { AttemptRecord } from './records.ts';
 import { holdSecretRegistry } from '../secrets.ts';
 import { processSecrets, redactForSession, sessionSecrecy } from './secrecy.ts';
@@ -53,7 +55,8 @@ export interface StandaloneAttempt {
   readonly budget: AttemptBudget;
   readonly artifactsDir: string;
   readonly tracePath: string;
-  close(): Promise<readonly SerializedError[]>;
+  close(options?: CloseSessionOptions): Promise<readonly SerializedError[]>;
+  outcome(): HostedSessionOutcome | undefined;
 }
 
 /** The prepared worker an attempt runs on. */
@@ -126,6 +129,7 @@ export async function launchAttempt(
   worker: AttemptWorker,
   reservation: AttemptReservation,
   onClosed: (closed: AttemptClosed) => Promise<void>,
+  beforeFinalize: (closed: AttemptClosed) => Promise<void>,
 ): Promise<StandaloneAttempt> {
   const { config, target, executor, runId } = worker;
   const { attemptId, options, budget, soft, polls, end } = reservation;
@@ -155,6 +159,12 @@ export async function launchAttempt(
     if (error === undefined) return { status: 'passed', error };
     return { status: classifyAttemptStatus(error, step?.status === 'timed-out', error.code === 'CANCELLED'), error };
   };
+  // Providers resolve fresh on every call, so even a populated ledger cannot certify future values.
+  const providerSecrets = [...config.allSecrets.values()].some((secret) => typeof secret.value === 'function');
+  let external: ExternalOutcome | undefined;
+  let finalOutcome: HostedSessionOutcome | undefined;
+  const effective = (): HostedSessionOutcome => hostedOutcome(verdict().status,
+    external === undefined ? undefined : parseCloseOutcome({ outcome: external }, (text) => processSecrets.redact(redact(text))));
   const video = attemptVideo(target.video, 0);
   session = await executor.launchSession({ session: undefined, recordings: { trace: undefined, video } }, attemptId, artifacts.dir, attemptSignal);
   const opened = session;
@@ -195,8 +205,16 @@ export async function launchAttempt(
   const startedMs = Date.now();
   const tracePath = path.join(artifacts.dir, 'trace.md');
   let ending: Promise<readonly SerializedError[]> | undefined;
-  const close = (): Promise<readonly SerializedError[]> => {
-    ending ??= (async () => {
+  const close = (closeOptions?: CloseSessionOptions): Promise<readonly SerializedError[]> => {
+    if (ending !== undefined) return ending;
+    // Claim finalization before parsing or callbacks can reenter close.
+    let resolve!: (failures: readonly SerializedError[]) => void;
+    let reject!: (cause: unknown) => void;
+    ending = new Promise((done, failed) => { resolve = done; reject = failed; });
+    // Withhold unverifiable caller identity before even a partial temporary-file write is possible.
+    try { external = parseCloseOutcome(closeOptions, (text) => providerSecrets ? undefined : text); }
+    catch (cause) { recordFailure(cause, 'body'); }
+    void (async () => {
       clearTimeout(expiry);
       const abandonedPoll = polls.close();
       const abandonedStep = steps.abandonRunning();
@@ -209,38 +227,83 @@ export async function launchAttempt(
         // Settling runs under the worker's signal; an interrupted host still ends its attempt below.
         if (!worker.signal.aborted) await executor.settleAttempt(opened, attemptId);
       } catch (cause) { recordFailure(cause, 'body'); }
-      const record: ClosingRecord = { status: verdict().status, cleanup: 'complete' };
+      try { await artifacts.settle(); } catch (cause) { recordFailure(cause, 'cleanup'); }
+      const record: ClosingRecord = {
+        status: verdict().status, cleanup: 'complete',
+        ...(worker.kind === 'hosted' ? { videoRetentionStatus: () => {
+          const outcome = effective();
+          return outcome.unexpected ? outcome.status : outcome.status === 'skipped' ? 'skipped' : 'passed';
+        } } : {}),
+      };
       try {
         await closeOpened(record);
       } catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; }
       try { await artifacts.settle(); } catch (cause) { recordFailure(cause, 'cleanup'); }
+      // A retiring worker may resolve provider secrets during disposal; finish that before publishing.
+      try { await beforeFinalize({ cleanup: record.cleanup }); }
+      catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; }
+      // Preparing the destination may fail retention, but writes no caller metadata.
+      let trace: Awaited<ReturnType<typeof prepareTextReport>> | undefined;
       if (worker.kind === 'hosted') {
-        try {
-          const { error, status } = verdict();
-          await writeHostTrace({
-            config, target, runId, testId: identity.testId, agent, tracePath, redact,
+        try { trace = await prepareTextReport(tracePath); }
+        catch (cause) { recordFailure(cause, 'cleanup'); }
+      }
+      const tracedFailures = attemptErrors.length;
+      try { await record.finalizeVideo?.(); }
+      catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; }
+      try { await artifacts.settle(); } catch (cause) { recordFailure(cause, 'cleanup'); }
+      if (attemptErrors.length !== tracedFailures) {
+        // Required recording failures may be collected rather than thrown.
+        try { await beforeFinalize({ cleanup: record.cleanup }); }
+        catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; }
+        try { await record.finalizeVideo?.(); } catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; }
+        try { await artifacts.settle(); } catch (cause) { recordFailure(cause, 'cleanup'); }
+      }
+      // Retirement and recovery can also fail. Finish them before any metadata bytes leave memory.
+      try { await beforeFinalize({ cleanup: record.cleanup }); }
+      catch (cause) { recordFailure(cause, 'cleanup'); record.cleanup = 'failed'; }
+      try {
+        if (trace !== undefined) {
+          const { error } = verdict();
+          const outcome = effective();
+          const status = outcome.status;
+          await trace.publish(renderHostTrace({
+            config, target, runId, testId: identity.testId, agent, redact,
             title: processSecrets.redact(redact(options.name ?? target.name)),
             resultsDir: worker.resultsDir, segments: identity.segments,
             attempt: {
-              id: attemptId, index: 0, status, startedAt, durationMs: Date.now() - startedMs,
+              id: attemptId, index: 0, status, hostedOutcome: outcome,
+              ...(status === 'skipped' ? { skip: { cause: 'explicit' as const, reason: 'external runner skipped the test' } } : {}), startedAt, durationMs: Date.now() - startedMs,
               steps: [...steps.all()], appLog: [...steps.appLog()], artifacts: artifacts.records,
               ...(error === undefined ? {} : { error }), secondaryErrors: attemptErrors.slice(1), cleanup: record.cleanup,
             },
-          });
-        } catch (cause) { recordFailure(cause, 'cleanup'); }
+          }));
+        }
+      } catch (cause) {
+        recordFailure(cause, 'cleanup');
+        // Private recovery links preserve the original inodes until publication succeeds.
+        try { await record.finalizeVideo?.(); } catch (error) { recordFailure(error, 'cleanup'); record.cleanup = 'failed'; }
+        try { await artifacts.settle(); } catch (error) { recordFailure(error, 'cleanup'); }
+        try { await beforeFinalize({ cleanup: record.cleanup }); }
+        catch (error) { recordFailure(error, 'cleanup'); record.cleanup = 'failed'; }
+      } finally {
+        await trace?.discard();
+        await record.releaseVideo?.();
       }
       try {
         await onClosed({ cleanup: record.cleanup });
       } finally {
         reservation.release();
       }
+      finalOutcome = effective();
+      external = finalOutcome.external;
       return attemptErrors;
-    })();
+    })().then(resolve, reject);
     return ending;
   };
   return {
     runId, attemptId, fixtures: acquired.fixtures, agentRuntime: acquired.agentRuntime, session: opened, steps, budget,
-    artifactsDir: artifacts.dir, tracePath, close,
+    artifactsDir: artifacts.dir, tracePath, close, outcome: () => finalOutcome,
   };
 }
 

@@ -15,6 +15,7 @@ type ReportArtifact = ReportResult['attempts'][number]['artifacts'][number];
 
 /** One attempt as a reporter reads it: what stopped it, the steps up to there, and what it left behind. */
 export interface AttemptView {
+  readonly hostedOutcome?: ReportResult['attempts'][number]['hostedOutcome'] | undefined;
   readonly status: ReportResult['attempts'][number]['status'] | 'skipped';
   readonly error: ReportError | undefined;
   readonly steps: readonly ReportStep[];
@@ -64,6 +65,7 @@ export function outcome(result: ReportResult, groups: ReadonlyMap<string, Report
 function attemptViews(result: ReportResult, groups: ReadonlyMap<string, ReportSerialGroup>): AttemptView[] {
   if (result.serialGroupId === undefined) {
     return result.attempts.map((attempt) => ({
+      hostedOutcome: attempt.hostedOutcome,
       status: attempt.status,
       error: attempt.error,
       steps: attempt.steps,

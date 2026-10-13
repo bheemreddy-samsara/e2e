@@ -266,7 +266,18 @@
                 "at": "2026-07-24T12:00:03.100Z",
                 "step": 0
               }
-            ]
+            ],
+            "hostedOutcome": {
+              "status": "failed",
+              "unexpected": true,
+              "sdkStatus": "failed",
+              "external": {
+                "actual": "failed",
+                "expected": "passed",
+                "retryIndex": 1,
+                "testId": "checkout"
+              }
+            }
           }
         ]
       },

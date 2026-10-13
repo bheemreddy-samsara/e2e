@@ -214,9 +214,11 @@ An `end` event includes `status`, `durationMs`, `modelCalls`, and a redacted
 | `steps()` | Read-only `StepRecord`s for steps run so far, as the [report](/reference/reporters) records them |
 | `artifactsDir` | Absolute directory for this attempt's screenshots, recordings, and trace |
 | `tracePath` | Absolute string path to `trace.md`; attach or read it after `close()` settles |
-| `close()` | Cancels remaining operations, ends the attempt, and writes its trace. Returns soft expectation and cleanup failures as `Promise<readonly SerializedError[]>` instead of throwing them |
+| `close(options?)` | Finalizes with optional external outcome, cancels remaining operations, ends the attempt, and writes its trace. Returns SDK failures as `Promise<readonly SerializedError[]>` |
+| `outcome()` | Frozen `HostedSessionOutcome` after close settles; `undefined` before then |
 
-`session.close()` is idempotent and returns the same failures on later calls.
+`session.close()` is idempotent. The first call wins, including concurrent
+calls, and later calls return the same failures without changing metadata.
 The host stays open for the next test. A session is `AsyncDisposable`:
 `await using session = await host.openSession({ name: 'checkout' })` closes
 it at scope exit and throws an `AggregateError` of the returned failures.
@@ -245,14 +247,89 @@ exposed. Match them with `isE2EError` and
 unknown target and `TARGET_REQUIRED` when several targets exist and none
 was named.
 
-<Note>
-A hosted session writes its trace, not a run report. Your runner owns retries
-and reporting; use `onStep`, `steps()`, and `close()`'s failures. Video follows
-the target's mode for a first attempt, including retaining failure-only video
-for soft failures and failed, blocked, timed-out, or cancelled steps. Your
-runner's test-body failures are not
-passed to e2e.
+### External outcomes
+
+Supply your runner's final facts before close finalizes:
+
+```ts
+// Fragment: session is an E2ESession opened for this external attempt.
+const sdkFailures = await session.close({
+  outcome: {
+    actual: 'failed',
+    expected: 'passed',
+    retryIndex: 1,
+    testId: 'checkout/pay',
+  },
+});
+const final = session.outcome();
+```
+
+`CloseSessionOptions.outcome` accepts only `ExternalOutcome` fields:
+
+| Field | Meaning |
+| --- | --- |
+| `actual` | Required: `passed`, `failed`, `timed-out`, `skipped`, or `interrupted` |
+| `expected` | Same vocabulary, default `passed`; describes only the external outcome |
+| `retryIndex` | Optional zero-based safe integer, 0 through `Number.MAX_SAFE_INTEGER` |
+| `testId` | Optional stable external identity, 1-256 UTF-16 code units; redacted or omitted as below, never used as a path |
+
+With any provider-backed secret in the config, close omits `testId` from
+its retained facts, `outcome()`, and trace, even if that provider already
+resolved. Providers resolve fresh on every call, so the ledger cannot prove
+that no new value will appear during later recovery or disposal. No provider
+is invoked just to redact identity. Without providers, stable identities
+are retained and literal or environment secrets are redacted before output.
+
+Map your runner's vocabulary to these statuses, for example `timedOut` to
+`timed-out`. Do not pass raw errors, causes, unknown fields, or getters.
+Invalid metadata is discarded and adds a generic `INVALID_CONFIG` SDK
+failure. Cleanup and trace writing still run.
+
+`HostedSessionOutcome` records `status`, `unexpected`, `sdkStatus`, and
+optional `external` facts. External failures do not create synthetic SDK
+errors. Your runner still fails its own assertions; check `sdkFailures`
+separately for SDK failures.
+
+SDK soft assertions, abandoned operations, deadlines, failed steps, and
+cleanup failures always win and are unexpected, even with an external pass
+or expected failure. Otherwise the external actual status is effective.
+A pass when failure was expected becomes effective `failed` and unexpected.
+A matching expected status is not unexpected. An external skip is never
+unexpected, even when expected differs, unless the SDK failed.
+
+The trace shows both sources and the effective verdict. Standard
+`report-1` attempts can carry the same optional `hostedOutcome` block.
+Hosted sessions still write a trace, not a run report. Close prepares an
+empty temporary file, then finishes video retention and any worker retirement
+before rendering metadata with the current secret ledger. Caller identity
+is withheld as above before any bytes reach even a temporary file. No trace
+is published before required retention completes or cleanup cancellation safely
+fences the failed transaction. A timed-out retention transaction cannot start
+more unlinks or registration; its complete recovery inodes are left private.
+An already-issued OS call cannot be killed and may finish later (for example,
+creating a recovery link or restoring the original inode). This is a fence
+on subsequent work, not physical filesystem cancellation. If trace publication
+fails, discarded local video is restored through no-clobber same-filesystem hardlinks,
+without copying video bytes. Discard first claims the producer path in a private
+directory, then checks its inode before unlinking. A replacement captured by that
+rename is kept private, never deleted. A replacement recreated by the producer
+after the rename stays at the public path; it is not deleted or registered as
+the original recording. Recovery refuses a newly created destination, preserving
+it at the public path and keeping the complete original recovery inode private. The SDK
+failures still report the persistence failure. If restoration fails or its destination conflicts, the complete
+recovery file stays private under the attempt's `.video-recovery-*`
+directory and is not registered or exported. Recovery cleanup is best-effort
+within the existing cleanup budget and can leave private files or empty staging
+directories after filesystem failures or stalls; it never triggers
+worker retirement after metadata publication.
+
+Video follows the target's mode for a first SDK attempt. Under
+`retain-on-failure`, effective unexpected failures retain video, including
+engine cleanup failures. External expected failures and skips alone do not.
+`retryIndex` is metadata only; it does not change recording modes, replay
+cache behavior, or create an SDK retry loop. Open a new session for every
+external retry. Auto-disposal or host close supplies no external facts;
+call session close explicitly first when your runner has an outcome.
 
 The one-shot attempt used by `e2e mcp` remains internal. There is no
 top-level `openSession` export.
-</Note>
