@@ -178,7 +178,9 @@ const CONTENT_NAMED_ROLES: ReadonlySet<string> = new Set(['status', 'alert', 'li
 /** The zero-match advice for a content-named role: match the text instead of retrying it as a name. */
 function contentNameNotFound(role: string, name: string, exact: boolean): string {
   const quoted = JSON.stringify(name);
-  return `A role query matches the accessible name only, and observe shows a ${role} by its text in its place. If ${quoted} is that text, use screen.getByRole(${JSON.stringify(role)}).filter({ hasText: ${quoted} }) or screen.getByText(${quoted}).${exact ? ' Otherwise loosen the match with exact: false.' : ''}`;
+  const article = /^[aeiou]/.test(role) ? 'an' : 'a';
+  const text = `screen.getByText(${quoted}${exact ? '' : ', { exact: false }'})`;
+  return `A role query matches the accessible name only, and observe shows ${article} ${role} by its text in its place. If ${quoted} is that text, use screen.getByRole(${JSON.stringify(role)}).filter({ hasText: ${quoted} }) or ${text}.${exact ? ' Otherwise loosen the match with exact: false.' : ''}`;
 }
 
 /** Renders a locate result: the count, the verdict a test would get, and the nodes, each through the attempt's redactor. */

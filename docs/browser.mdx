@@ -78,13 +78,18 @@ A function handler gets the dialog and must call `accept(text?)` or
 ## Download a file
 
 ```ts
+import { readFile } from 'node:fs/promises';
+
 const file = await browser.waitForDownload(() =>
   screen.getByRole('link', 'Export CSV').tap(),
 );
+const csv = await readFile(file.absolutePath, 'utf8');
+expect(csv).toContain('Invoice');
 ```
 
-e2e saves the file as a `download` artifact. `file.path` is relative to the
-attempt's artifact directory, not to the project.
+e2e saves the file as a `download` artifact. Read it through
+`file.absolutePath`, which works with hosted browsers too. `file.path` is
+relative to the attempt's artifact directory, not to the project.
 
 ## Reach into an iframe
 

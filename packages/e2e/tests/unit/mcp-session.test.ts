@@ -50,10 +50,14 @@ describe('describeLocate', () => {
     expect(exact).toContain('LOCATOR_NOT_FOUND');
     expect(exact).toContain('screen.getByRole("status").filter({ hasText: "Saved." })');
     expect(exact).toContain('screen.getByText("Saved.")');
+    expect(exact).toContain('observe shows a status by its text');
     expect(exact).not.toContain('Check the accessible name in the observation');
     const loose = describeLocate(locateQuery({ role: 'status', name: 'Saved.', exact: false }), 0, [], none);
     expect(loose).toContain('screen.getByRole("status").filter({ hasText: "Saved." })');
-    expect(loose).not.toContain('exact: false');
+    expect(loose).toContain('screen.getByText("Saved.", { exact: false })');
+    expect(loose).not.toContain('loosen');
+    expect(describeLocate(locateQuery({ role: 'alert', name: 'Failed' }), 0, [], none)).toContain('observe shows an alert by its text');
+    expect(describeLocate(locateQuery({ role: 'listitem', name: 'Milk' }), 0, [], none)).toContain('observe shows a listitem by its text');
     const button = describeLocate(locateQuery({ role: 'button', name: 'Submitt' }), 0, [], none);
     expect(button).toContain('Check the accessible name in the observation');
     expect(button).not.toContain('hasText');

@@ -1,12 +1,69 @@
 ---
 title: "e2e/runner"
-description: "List the tests a selection would run, or host e2e sessions in another test runner."
+description: "Run a test suite, list its selection, or host e2e sessions in another test runner."
 icon: "file-lines"
-"og:image": "https://e2e.tester.army/docs/images/og/reference/runner.png?v=a4c80234f3"
-"twitter:image": "https://e2e.tester.army/docs/images/og/reference/runner.png?v=a4c80234f3"
+"og:image": "https://e2e.tester.army/docs/images/og/reference/runner.png?v=98c298d3ed"
+"twitter:image": "https://e2e.tester.army/docs/images/og/reference/runner.png?v=98c298d3ed"
 ---
 
-`e2e/runner` runs e2e in process without `e2e run`. `list` returns a selection. `openHost` prepares a target for your test runner, and `host.openSession` opens a fresh attempt for each test. Importing `e2e` from a test file does not load the runner.
+`e2e/runner` runs a suite from code without invoking the CLI. `run` executes tests and returns their report; `list` returns a selection. `openHost` prepares a target for your test runner, and `host.openSession` opens a fresh attempt for each test. Importing `e2e` from a test file does not load the runner.
+
+## run
+
+`run(options?: RunOptions)` executes a complete suite and returns `Promise<RunResult>`. It finishes cleanup before resolving and never exits the caller's process.
+
+```ts
+import type { E2EConfig } from 'e2e';
+import { run } from 'e2e/runner';
+import { web } from '@e2e-dev/web';
+
+const config: E2EConfig = {
+  targets: [{ name: 'web', engine: web(), app: { url: 'http://localhost:3000' } }],
+};
+const controller = new AbortController();
+const result = await run({
+  config,
+  files: ['tests/signup.e2e.ts'],
+  interruptSignal: controller.signal,
+  onEvent(event) {
+    if (event.type === 'test-started') console.log(event.title);
+  },
+});
+
+console.log(result.status, result.report.run.summary);
+```
+
+### Execution options
+
+`run` accepts these options. Put execution settings, such as retries and workers, in the config.
+
+| Option | Meaning |
+| --- | --- |
+| `cwd` | Project directory. Defaults to the current working directory. |
+| `config` | Config file path or an `E2EConfig` value. Omit it to discover `e2e.config.ts`. |
+| `files` | File selection: paths, globs, bare names, or `file:line`. Omit it to run the configured suite. |
+| `interruptSignal` | Abort to interrupt tests and execute teardown. |
+| `onEvent` | Receives typed progress events. Must not block; a throwing or rejecting callback is disabled without failing the run. |
+
+Runtime config runs with one worker in the caller's process. A file config supports the configured worker processes. Terminal progress is disabled; use `onEvent` for progress.
+
+Helper modules your test files import stay cached between `run` calls in the same process, so edits to them need a new process.
+
+### Completed result
+
+| Field | Meaning |
+| --- | --- |
+| `exitCode` | The CLI-equivalent exit code: `0`, `1`, `2`, `3`, `4`, or `130`. |
+| `status` | `passed`, `failed`, `blocked`, `error`, or `interrupted`. |
+| `report` | The complete report. Read `report.run.results`, `report.run.errors`, and `report.run.summary` for outcomes. |
+| `reportPath` | Absolute path to `report.json`, or `undefined` if it could not be written. |
+| `aiTracePath` | AI trace path, or `undefined` when no AI trace was written. |
+
+Test failures, config failures, and interruption resolve with their status and errors in the report. Overlapping suites reject with `RUNNER_BUSY`. Close every host before running a suite, and await the suite before opening a host.
+
+Each run that returns a report sends one anonymous [`e2e_run_completed`](/telemetry) event, with the same opt-outs as the CLI. The first call can print the telemetry notice on stderr.
+
+Suite output uses UTF-8 text redaction and does not preserve binary data. Your application's logs and progress callback output stay under your control.
 
 ## list
 

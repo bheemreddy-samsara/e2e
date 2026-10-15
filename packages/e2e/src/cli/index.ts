@@ -6,6 +6,7 @@ import { Argument, Command, CommanderError, InvalidArgumentError, Option } from 
 import picocolors from 'picocolors';
 import { detectPackageManager, execCommand, runScriptCommand } from '../internal/package-manager.ts';
 import { packageVersion } from '../internal/package-version.ts';
+import { MAX_TIMER_MS } from '../internal/time.ts';
 import { classifyError, exitCodeForCategory } from '../internal/errors.ts';
 import type { Shard, TagMode } from '../collect/select.ts';
 import { list, type ListedPair } from '../runner.ts';
@@ -37,7 +38,7 @@ import { watchSession } from './watch.ts';
 import { telemetry as telemetryCommand, TELEMETRY_ACTIONS, type TelemetryAction } from './telemetry.ts';
 import { wordmarkBanner } from './wordmark.ts';
 
-/** An integer of at least one, for `--max-failures` and `--max-duration`. */
+/** An integer of at least one, for `--max-failures` and `--repeat-each`. */
 function parsePositiveInt(value: string): number {
   const parsed = Number(value);
   if (!Number.isSafeInteger(parsed) || parsed < 1) throw new InvalidArgumentError('must be a positive integer');
@@ -80,7 +81,7 @@ function parseShard(value: string): Shard {
   return { index, total };
 }
 
-/** An integer inside a closed range, for the explore budgets. */
+/** An integer inside a closed range, for the explore budgets and `--max-duration`. */
 function parseBoundedInt(bounds: { readonly min: number; readonly max: number }): (value: string) => number {
   return (value) => {
     const parsed = Number(value);
@@ -569,7 +570,7 @@ function createProgram(version: string, telemetry: Telemetry): Command {
     .option('--workers <n>', 'parallel workers (default: from the config)', parseNonNegativeInt)
     .option('--retries <n>', 'retries per failing test (default: from the config)', parseNonNegativeInt)
     .option('--max-failures <n>', 'stop the run once this many tests have failed; the rest are skipped', parsePositiveInt)
-    .option('--max-duration <ms>', 'stop the run once it has spent this many milliseconds running tests; the rest are skipped (default: maxDuration in the config)', parsePositiveInt)
+    .option('--max-duration <ms>', 'stop the run once it has spent this many milliseconds running tests; the rest are skipped (default: maxDuration in the config)', parseBoundedInt({ min: 1, max: MAX_TIMER_MS }))
     .option('--repeat-each <n>', 'run every selected test this many times, each run its own result (pair with --no-cache to exercise the model each time)', parsePositiveInt)
     .option('--no-cache', 'run with the replay cache off, whatever the config says')
     .option('--strict-cache', 'fail a step whose recording no longer replays (REPLAY_STALE) instead of handing it to the agent; never writes the cache')

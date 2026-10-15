@@ -16,7 +16,8 @@ export type Operation =
   | 'drag'
   | 'scroll_to'
   | 'upload'
-  | 'tap_at';
+  | 'tap_at'
+  | 'type_at';
 /**
  * Viewport, history, and keyboard controls, offered when the engine declares
  * the verb; `dismiss_keyboard` only while an on-screen keyboard is showing.
@@ -69,6 +70,8 @@ export interface ActionSpace {
   readonly destinations: ReadonlyMap<string, Destination>;
   /** Whether `tap_at` is offered: a screenshot, the `tapAt` verb, and a step that locates. */
   readonly tapAt: boolean;
+  /** Whether `type_at` is offered: `tap_at` is, and the engine types into whatever holds focus. */
+  readonly typeAt: boolean;
   /** Elements left out to stay under the per-question cap; scrolling can bring them into view. */
   readonly omitted: number;
   /** Non-interactive page text from the tree, without node ids, clipped to 6000 chars. */
@@ -101,8 +104,6 @@ const keyboardRoles = new Set(['keyboard', 'key']);
 const liveRegions = new Set(['status', 'alert', 'log']);
 const MAX_STATUSES = 20;
 const MAX_STATUS_LENGTH = 300;
-/** Roles that can receive a dropped node. */
-const droppable = new Set(['region', 'list', 'listitem', 'group', 'cell', 'gridcell', 'row', 'article', 'section', 'tabpanel']);
 /**
  * Roles of nodes that are no control yet take a pointer: a card that opens
  * a menu on hover, a file row that takes a right-click, a paragraph to
@@ -135,6 +136,8 @@ interface SpaceObservation {
   readonly pixels?: ExecutorPixels;
   /** Whether the step can locate a drawn control on the pixels: the decision model scores and a text model names it. */
   readonly locates?: boolean;
+  /** The engine's measured keyboard state; undefined leaves it to the tree. */
+  readonly keyboardVisible?: boolean | undefined;
 }
 
 /** Builds the element table and bound targets from the newest observation. */
@@ -162,8 +165,10 @@ export function actionSpace(ctx: StepExecutorContext, observation: SpaceObservat
       const fileInput = node.attributes?.['type'] === 'file';
       const inViewport = intersects(node, observation.viewport);
       const pressable = tappable.has(role) && !checkable.has(role) && !(role === 'option' && childSelect) && !fileInput;
-      if (verbs.has('tap') && pressable) operations.push('tap');
-      if (typable.has(role) && !nativeSelect) {
+      const field = typable.has(role) && !nativeSelect;
+      // A tap on a field focuses it and opens what the app attaches there: a date picker, a suggestion list.
+      if (verbs.has('tap') && (pressable || field)) operations.push('tap');
+      if (field) {
         if (!password && verbs.has('type') && canType) operations.push('type');
         if (verbs.has('typeSecret') && secretTypable.has(role) && ctx.step.secrets.length > 0) {
           operations.push('typeSecret');
@@ -218,14 +223,17 @@ export function actionSpace(ctx: StepExecutorContext, observation: SpaceObservat
     .map(({ row }) => row);
   const omitted = Math.max(0, ordered.length - MAX_CHOICES);
   const kept = ordered.slice(0, MAX_CHOICES);
-  // Drop targets come from the kept rows: a drag with nowhere to drop is no operation.
+  // Drop targets come from the kept rows a pointer reaches, whatever their
+  // role: a board whose columns are bare text takes a drop on the column's
+  // title. A drag needs a second row to drop on, or it is no operation.
   const destinations = new Map<string, Destination>();
   if (verbs.has('drag')) {
     for (const [position, row] of kept.entries()) {
       const role = row.node.role ?? '';
       const label = clip(nodeLabel(row.node), 120);
-      if (droppable.has(role) && label !== '') destinations.set(String(position + 1), { id: row.node.id, label, role });
+      if (row.operations.includes('drag')) destinations.set(String(position + 1), { id: row.node.id, label, role });
     }
+    if (destinations.size < 2) destinations.clear();
   }
   const targets = new Map<Operation, Map<string, Target>>();
   const byIndex = new Map<string, Element>();
@@ -281,26 +289,29 @@ export function actionSpace(ctx: StepExecutorContext, observation: SpaceObservat
     return element;
   });
   const tapAt = observation.pixels !== undefined && observation.locates === true && verbs.has('tapAt');
+  const typeAt = tapAt && verbs.has('typeText');
   const controls = new Set<Control>();
   if (verbs.has('scroll')) {
     controls.add('scroll_up');
     controls.add('scroll_down');
   }
   if (verbs.has('back')) controls.add('back');
-  if (verbs.has('dismissKeyboard') && keyboardShowing(observation.tree)) controls.add('dismiss_keyboard');
+  if (verbs.has('dismissKeyboard') && (observation.keyboardVisible === undefined ? keyboardShowing(observation.tree) : observation.keyboardVisible)) controls.add('dismiss_keyboard');
   return {
     elements,
     element: (key) => byIndex.get(targetKeyIndex(key)),
     targets,
     controls,
-    operation: (choice) => (targets.has(choice as Operation) || (tapAt && choice === 'tap_at') ? (choice as Operation) : undefined),
+    operation: (choice) =>
+      targets.has(choice as Operation) || (tapAt && choice === 'tap_at') || (typeAt && choice === 'type_at') ? (choice as Operation) : undefined,
     control: (choice) => (controls.has(choice as Control) ? (choice as Control) : undefined),
     destinations,
     tapAt,
+    typeAt,
     omitted,
     pageText: clip(pageText.join('\n'), 6000),
     statuses,
-    fingerprint: fingerprint(observation.path ?? '', observation.tree, observation.viewport, observation.pixels),
+    fingerprint: fingerprint(observation),
   };
 }
 /**
@@ -317,6 +328,7 @@ function named(role: string, label: string): string {
 const VERBS: Readonly<Record<Operation, string>> = {
   select: 'select',
   tap_at: 'tap at',
+  type_at: 'type at',
   tap: 'tap',
   type: 'type into',
   typeSecret: 'typeSecret into',
@@ -337,8 +349,9 @@ export function targetKeyIndex(key: string): string {
 }
 
 /**
- * Whether the tree lists an on-screen keyboard. Offering the control only
- * then keeps a choice that does nothing out of the operation question.
+ * Whether the tree lists an on-screen keyboard, for an engine that does not
+ * measure it. Offering the control only then keeps a choice that does
+ * nothing out of the operation question.
  */
 function keyboardShowing(node: ExecutorNode): boolean {
   if (node.states?.hidden === true) return false;
@@ -376,17 +389,19 @@ function clip(text: string, limit: number): string {
 }
 
 /**
- * Stable hash of the path, the tree content with node ids removed, whether
- * each node meets the viewport, and the pixels when the step sees them. Ids
- * change on every capture, so they stay out. In-view membership lets a
- * scroll that brings other nodes into view count as progress, while one
- * that moves nothing (the page bottom) still reads as unchanged; raw
- * coordinates stay out so small layout shifts do not count. Pixels are in
- * because a drawn control changes nothing in the tree: a keypad digit
- * entered on a canvas is progress only the screenshot shows.
+ * Stable hash of the path, the measured keyboard state, the tree content
+ * with node ids removed, whether each node meets the viewport, and the
+ * pixels when the step sees them. Ids change on every capture, so they stay
+ * out. In-view membership lets a scroll that brings other nodes into view
+ * count as progress, while one that moves nothing (the page bottom) still
+ * reads as unchanged; raw coordinates stay out so small layout shifts do not
+ * count. Pixels are in because a drawn control changes nothing in the tree:
+ * a keypad digit entered on a canvas is progress only the screenshot shows.
+ * The keyboard state is in because a dismissal can leave the tree as it was,
+ * and an unmeasured state hashes apart from a measured `false`.
  */
-function fingerprint(path: string, tree: ExecutorNode, viewport: { width: number; height: number }, pixels?: ExecutorPixels): string {
-  const parts: (string | Uint8Array)[] = [path];
+function fingerprint({ path, tree, viewport, keyboardVisible, pixels }: SpaceObservation): string {
+  const parts: (string | Uint8Array)[] = [path ?? '', keyboardVisible === undefined ? 'unmeasured' : String(keyboardVisible)];
   if (pixels !== undefined) parts.push(pixels.data);
   const visit = (node: ExecutorNode): void => {
     parts.push(node.role ?? '', node.name ?? '', node.text ?? '', node.value ?? '', JSON.stringify(node.states ?? null), JSON.stringify(node.attributes ?? null), intersects(node, viewport) ? 'v' : '-');

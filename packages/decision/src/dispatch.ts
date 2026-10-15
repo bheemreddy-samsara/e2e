@@ -11,6 +11,7 @@ export type Action =
   | { readonly operation: 'upload'; readonly target: Target; readonly paths: readonly string[] }
   | { readonly operation: 'drag'; readonly target: Target; readonly destinationId: string }
   | { readonly operation: 'tap_at'; readonly point: Point }
+  | { readonly operation: 'type_at'; readonly point: Point; readonly text: string }
   | { readonly operation: Control };
 /**
  * Performs one action through the runner's grammar: the only place that
@@ -77,6 +78,12 @@ export async function perform(ctx: StepExecutorContext, action: Action): Promise
       const result = await actions.tapAt(action.point);
       return result.target === undefined ? undefined : `landed on listed control ${result.target.id}`;
     }
+    case 'type_at':
+      // The tap gives the drawn field focus; the keyboard then types into whatever took it.
+      // No replace: a device cannot clear a focused field without a node, so text goes in at the caret everywhere.
+      await actions.tapAt(action.point);
+      await actions.typeText(action.text);
+      return undefined;
   }
 }
 function node(target: Target): { id: string } {

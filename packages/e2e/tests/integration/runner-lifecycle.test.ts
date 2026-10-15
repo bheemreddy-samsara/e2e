@@ -803,6 +803,9 @@ test('never started either', async () => {});
       expect(stopped.status).toBe('failed');
       expect(stopped.report.run.summary).toMatchObject({ selected: 3, passed: 0, failed: 0, interrupted: 1, skipped: 2 });
       expect(resultByTitle(stopped, 'sleeps past the limit').status).toBe('interrupted');
+      expect(resultByTitle(stopped, 'sleeps past the limit').attempts.at(-1)?.error?.message).toBe(
+        'run interrupted in phase body: run stopped at its time limit of 2000 ms (--max-duration)',
+      );
       for (const title of ['never started', 'never started either']) {
         expect(resultByTitle(stopped, title).skip).toEqual({ cause: 'time-limit', reason: 'run stopped at its time limit of 2000 ms (--max-duration)' });
       }
@@ -817,6 +820,9 @@ test('never started either', async () => {});
         ['RUN_TIMEOUT', 'run stopped at its time limit of 2000 ms (maxDuration): the running tests end as interrupted, the rest are skipped'],
       ]);
       expect(resultByTitle(configStopped, 'sleeps past the limit').status).toBe('interrupted');
+      expect(resultByTitle(configStopped, 'sleeps past the limit').attempts.at(-1)?.error?.message).toBe(
+        'run interrupted in phase body: run stopped at its time limit of 2000 ms (maxDuration)',
+      );
       for (const title of ['never started', 'never started either']) {
         expect(resultByTitle(configStopped, title).skip?.cause).toBe('time-limit');
       }

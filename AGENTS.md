@@ -585,7 +585,10 @@ trees, on both platforms, without a device.
   any prose an agent writes here; other agents install it with
   `npx skills add okwasniewski/dotfiles --skill unslop`.
 - Releases go through changesets: a user-visible change adds a `.changeset/`
-  entry. Peer ranges point one way only (engine -> `e2e`, integration ->
+  entry. On `0.x` the bump is `patch` for a feature or fix; never
+  pick `minor` on your own. A breaking change is a `minor` with the summary
+  opening `**Breaking:**`; a `minor` or `major` for a release the maintainer
+  calls opens `**Release:**` (`scripts/check-changeset-bumps.ts`, `pnpm check`). Peer ranges point one way only (engine -> `e2e`, integration ->
   engine) and read `>=<major.minor.patch> <major+1>`, the floor the oldest
   sibling the package works with. Raise it when a package starts relying on a
   newer sibling's export or contract field;

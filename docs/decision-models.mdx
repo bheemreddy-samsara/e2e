@@ -109,10 +109,15 @@ newest screen: `tap`, `type`, `typeSecret`, `submit`, `select`, `check`,
 `upload`, `hover`, `secondary_tap` (a right-click), `double_tap`,
 `long_press`, `drag`, `scroll_to`, `scroll_up`, `scroll_down`, and `back`.
 Hover, right-click, drag, and scroll-to also reach labeled nodes that are
-not controls, such as a card that opens a menu on hover. While an on-screen
+not controls, such as a card that opens a menu on hover, and a drag can drop
+onto any of them. `tap` also reaches text fields, to open a date picker or a
+suggestion list. While an on-screen
 keyboard shows on an engine that can dismiss it, such as the mobile engine,
-the executor also offers `dismiss_keyboard`.
+the executor also offers `dismiss_keyboard`, even when the keyboard is
+missing from the tree.
 
+Every operation that acts on an element asks for its target, even when only
+one element fits it.
 Every target question has a `none` option, so a provider with no fitting
 target answers `none` instead of refusing. `none` blocks the step.
 
@@ -130,7 +135,7 @@ secret, from its declared handle.
 
 The text model also answers `waitFor` and `extract`. Instead of
 `textModel`, you can set `model` on the agents entry. With neither, the
-executor never offers `type`, `upload`, or `tap_at`.
+executor never offers `type`, `upload`, `tap_at`, or `type_at`.
 
 ## Finishing a step
 
@@ -167,16 +172,36 @@ doesn't show. The operation and target questions read the tree only.
 `agent.assert(..., { vision: true })` and `vision: 'only'` work too. After a
 secret fill in the attempt, the executor gets no pixels.
 
-The model must accept images and answer `score` questions, as
-`openai.decisionModel('gpt-6-luna')` does. A text-only model such as Jev
-refuses the screenshot. Vercel AI Gateway rejects it too, so keep `vision`
-off there.
+The model must accept images and answer `score` questions. TypeSafe Jev
+does with `@ai-sdk/typesafe-ai` 3.0.19 or later and a TypeSafe API key in
+`TYPESAFE_AI_API_KEY`:
+
+```ts title="e2e.config.ts"
+import { typeSafeAi } from '@ai-sdk/typesafe-ai';
+import { openrouter } from '@openrouter/ai-sdk-provider';
+
+const executor = decisionExecutor({
+  model: typeSafeAi.decisionModel('jev-latest'),
+  textModel: openrouter('inception/mercury-2.5'),
+  vision: true,
+});
+```
+
+`openai.decisionModel('gpt-6-luna')` takes images too. Vercel AI Gateway
+rejects the screenshot for every decision model, so keep `vision` off
+there.
 
 With a text model, vision also offers `tap_at` for a control the tree
 doesn't list. The text model names the control, such as "the 3 key on the
-keypad", and the decision model finds it on the screenshot, then on a
-zoomed crop. A point tap costs three decide calls and one text call, or one
+keypad", and the decision model finds it on the screenshot, then on two
+zoomed crops. A point tap costs four decide calls and one text call, or one
 of each to repeat a tap on the same page.
+
+When the engine can type into whatever has focus, vision also offers
+`type_at` for a drawn field. The text model names the field and the value
+from the goal, the decision model finds the field on the screenshot, and
+the executor taps it and types the value at the caret, after any text
+already there. It costs two decide calls and one text call.
 
 ## Provider options
 
@@ -221,8 +246,8 @@ executor takes that choice with probability 1 and confidence 0, so a
 
 - No `navigate`. In-app navigation is a `tap` on a link. URLs belong in
   test code (`browser.goto`, `app.open`).
-- No multi-select `listbox`, no `scrollUntil`, and no typing at a point
-  (`type_at`).
+- No multi-select `listbox` and no `scrollUntil`. `type_at` never clears a
+  drawn field first, so it suits empty fields.
 - The text model that names a drawn control doesn't see pixels. It can't
   follow an instruction that exists only as drawn text, such as a wizard
   that paints "tap the circle".

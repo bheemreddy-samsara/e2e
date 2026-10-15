@@ -1129,7 +1129,7 @@ type SelectionRunOptions = Pick<
 >;
 
 /** The public `list` bag as the options config loading and selection already take. */
-function toSelectionRunOptions(options: ListOptions): SelectionRunOptions {
+export function toSelectionRunOptions(options: ListOptions): SelectionRunOptions {
   const { config, targets, ...rest } = options;
   return {
     ...rest,

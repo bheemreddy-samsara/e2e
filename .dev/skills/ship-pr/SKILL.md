@@ -34,7 +34,10 @@ pnpm test:web-benchmark       # when the runner, web engine, or benchmark change
 
 Then the repo rules `pnpm check` cannot see (`AGENTS.md`, "Contracts"):
 
-- A user-visible change to a published package adds a `.changeset/` entry.
+- A user-visible change to a published package adds a `.changeset/` entry,
+  bumped `patch` on `0.x` even for a feature. `minor` only when the change is
+  breaking (summary opens `**Breaking:**`) or the maintainer calls a big
+  release (`**Release:**`).
 - Behavior changes update the matching `docs/**/*.mdx` page in the same
   change, "not implemented yet" callouts included, and `skills/e2e/` when it
   describes the changed surface.

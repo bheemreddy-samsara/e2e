@@ -155,6 +155,16 @@ export function interruptedSkip(signal: AbortSignal, fallback: SkipInfo = INTERR
   return isSkipInfo(reason) ? reason : fallback;
 }
 
+/**
+ * The message of an attempt an interrupt cut short in `phase`, naming the
+ * limit that stopped the run when the interrupt carried one.
+ */
+export function interruptedInPhase(signal: AbortSignal, phase: string): string {
+  const reason: unknown = signal.reason;
+  const message = `run interrupted in phase ${phase}`;
+  return isSkipInfo(reason) ? `${message}: ${reason.reason}` : message;
+}
+
 function isSkipInfo(value: unknown): value is SkipInfo {
   return typeof value === 'object' && value !== null && typeof (value as SkipInfo).cause === 'string' && typeof (value as SkipInfo).reason === 'string';
 }

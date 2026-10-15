@@ -144,6 +144,9 @@ without acting. Engines with a keyboard add `typeText`, `pressKey`, and
 path outside the project root or a hidden one with `POLICY_DENIED`, and a
 missing file with `INVALID_ARGUMENT`.
 
+The observation's `keyboardVisible` says whether an on-screen keyboard is
+showing, and is absent when the engine can't tell.
+
 When semantic capture fails, the observation sets `treeUnavailable: true`,
 has no `tree`, and includes a screenshot if policy allows. Earlier node ids
 are invalid, and a missing tree doesn't prove a control is absent.

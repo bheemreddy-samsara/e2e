@@ -53,7 +53,7 @@ import { isFailedStatus } from './records.ts';
 import { traceScreen } from './step-screens.ts';
 import { runWithRetries } from './retry.ts';
 import { runSerialUnit, type SerialAttemptRun, type SerialAttemptStart, type SerialHost, type SharedSerialSession } from './serial.ts';
-import { interruptedSkip, pairKey, pairResult, unstartedResult } from './units.ts';
+import { interruptedInPhase, interruptedSkip, pairKey, pairResult, unstartedResult } from './units.ts';
 import { adoptSecrecy, carriedSecrecy, processSecrets, registerDerivedSecrets, redactForSession, resolveSecretValue, sessionSecrecy, staticSecretLedger } from './secrecy.ts';
 import { isSecret } from '../secrets.ts';
 import { SessionStaging, SessionStore, targetIdentity, type SessionIdentity } from './sessions.ts';
@@ -1034,7 +1034,7 @@ export class TargetExecutor implements SerialHost {
       // run on is published here and cleared when `attemptEnd` fires in `finally`.
       const soft = new SoftFailures();
       publishAttempt(
-        { attemptId, testKind: pair.test.kind, assertionTimeout: this.config.assertionTimeout, budget, soft },
+        { attemptId, owner: 'suite', testKind: pair.test.kind, assertionTimeout: this.config.assertionTimeout, budget, soft },
         attemptEnd.signal,
       );
 
@@ -1119,7 +1119,7 @@ export class TargetExecutor implements SerialHost {
         ? withAbort(
             runInPollScope(bodyPolls, mainWork),
             this.interruptSignal,
-            () => new E2EError('interrupted', 'INTERRUPTED', `run interrupted in phase ${phase}`),
+            () => new E2EError('interrupted', 'INTERRUPTED', interruptedInPhase(this.interruptSignal, phase)),
           )
         : runInPollScope(bodyPolls, mainWork);
       const body = Promise.race([

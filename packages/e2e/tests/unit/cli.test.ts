@@ -205,16 +205,19 @@ describe('e2e run argument parsing', () => {
     expect(runMock).not.toHaveBeenCalled();
   });
 
-  it('parses --max-duration as a positive integer of milliseconds', async () => {
+  it('parses --max-duration as milliseconds a timer can wait and rejects anything else as a flag error', async () => {
     await invoke('run', '--max-duration', '900000');
     expect(lastRunOptions().maxDuration).toBe(900_000);
     runMock.mockClear();
-    for (const value of ['0', '-1', '2.5', '15m']) {
+    await invoke('run', '--max-duration', '2147483647');
+    expect(lastRunOptions().maxDuration).toBe(2_147_483_647);
+    runMock.mockClear();
+    for (const value of ['0', '-1', '2.5', '15m', '2147483648']) {
       stderrSpy.mockClear();
       process.exitCode = undefined;
       await invoke('run', '--max-duration', value);
       expect(process.exitCode, value).toBe(2);
-      expect(written(stderrSpy)).toContain('must be a positive integer');
+      expect(written(stderrSpy)).toContain(`option '--max-duration <ms>' argument '${value}' is invalid. must be an integer from 1 through 2147483647`);
     }
     expect(runMock).not.toHaveBeenCalled();
   });

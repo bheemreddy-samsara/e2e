@@ -14,6 +14,7 @@ function attempt(): { soft: SoftFailures; end: () => void } {
   publishAttempt(
     {
       attemptId: 'attempt',
+      owner: 'suite',
       testKind: 'test',
       assertionTimeout: 5000,
       budget: new AttemptBudget(new AbortController().signal, new Deadline(10_000)),

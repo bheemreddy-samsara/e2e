@@ -144,6 +144,13 @@ If your change affects `e2e`, `@e2e-dev/web`, `@e2e-dev/mobile`, or
 pnpm changeset
 ```
 
+While a package is `0.x`, a feature or fix is a `patch`. A breaking change
+is a `minor` whose summary opens with `**Breaking:**`. A release a maintainer
+calls (a big launch, `1.0`) opens with `**Release:**` and may be a `minor` or
+`major`. `pnpm check` fails on any other `0.x` minor or major. `e2e init` writes
+`^0.x.y`, which on `0.x` takes patches only, so features as patches reach
+users without a `package.json` edit.
+
 Changes limited to the apps (testbed, web benchmark, mobile benchmark), docs,
 or CI don't need one. Everything under `apps/` is private and skipped entirely
 (`privatePackages: false`), so none gets a version bump, a changelog, or a git
@@ -265,8 +272,8 @@ prompts and tool descriptions.
   on, twice a year.
 - Removal happens at the end of the window, in a minor release while the
   packages are `0.x` (semver treats `0.x` minors as breaking) and in a major
-  release from `1.0` onward. The changeset body names both the removed form
-  and its replacement, and the PR title carries the `!`.
+  release from `1.0` onward. The changeset body opens with `**Breaking:**`,
+  names both the removed form and its replacement, and the PR title carries the `!`.
 - A deprecation is announced in three places when it lands: the changeset
   (so it reaches the changelog and the GitHub release), the reference page
   for the surface, and a runtime warning the first time the old form is used

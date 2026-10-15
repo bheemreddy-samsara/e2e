@@ -119,11 +119,23 @@ describe('openHost: deadline', { timeout: 60_000 }, () => {
     const error: unknown = await sdkExpect.poll(() => false, { timeout: 30_000, interval: 5 }).toBe(true).catch((cause: unknown) => cause);
     expect(error).toSatisfy((cause: { code: string; message: string }) =>
       (cause.code === 'ASSERTION_FAILED' && cause.message.includes('attempt deadline')) || (cause.code === 'TEST_TIMEOUT' && cause.message.includes('session timed out')));
-    // The poll's rejection is the caller's; close reports the session's own cut only when it landed before close.
-    expect((await session.close()).map((failure) => failure.code)).toSatisfy((codes: string[]) => codes.every((code) => code === 'TEST_TIMEOUT'));
+    // The poll's rejection is the caller's; close reports the session's own cut whether or not its timer ran first.
+    expect((await session.close()).map((failure) => failure.code)).toEqual(['TEST_TIMEOUT']);
+    expect(readFileSync(session.tracePath, 'utf8')).toContain('· timed out ·');
     const next = await opened.openSession({ name: 'after timeout', timeout: 5_000 });
     await sdkExpect.poll(() => true).toBe(true);
     expect(await next.close()).toEqual([]);
+  });
+
+  it('times out a session closed past its deadline before the deadline timer ran', async () => {
+    const fake = createFakeEngine();
+    const opened = await host(fake.engine);
+    const session = await opened.openSession({ name: 'closed past deadline', timeout: 20 });
+    // Holding the event loop past the deadline keeps its timer from running before close.
+    const busyUntil = Date.now() + 60;
+    while (Date.now() < busyUntil) { /* busy */ }
+    expect(await session.close()).toEqual([expect.objectContaining({ code: 'TEST_TIMEOUT', message: expect.stringContaining('session timed out after 20 ms') })]);
+    expect(readFileSync(session.tracePath, 'utf8')).toContain('· timed out ·');
   });
 
   it.each(['session signal', 'host signal', 'session close', 'host close'] as const)('cancels an in-flight poll on %s', async (cancellation) => {

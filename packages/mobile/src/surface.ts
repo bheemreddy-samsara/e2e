@@ -49,6 +49,7 @@ import { pointerInteraction, DEFAULT_LONG_PRESS_MS } from './actions.ts';
 import { resolveExpression } from './locate.ts';
 import {
   isWithin,
+  normalizeKind,
   projectSnapshot,
   ROOT_ID,
   screenRoot,
@@ -145,6 +146,16 @@ const KEYBOARD_TYPES: ReadonlySet<string> = new Set(['keyboard', 'key']);
 const KEYBOARD_DRAG_RATIO = 0.03;
 
 /**
+ * Whether the capture's producer measured the soft keyboard on screen:
+ * undefined when it did not look or could not.
+ */
+function measuredKeyboard(raw: RawSnapshot): boolean | undefined {
+  if (raw.keyboard?.kind === 'visible') return true;
+  if (raw.keyboard?.kind === 'absent') return false;
+  return undefined;
+}
+
+/**
  * Whether a capture shows the soft keyboard: the band its producer measured
  * when it measured one, else a keyboard or key element in the tree, the probe
  * Maestro's `hideKeyboard` uses. A capture that says nothing either way
@@ -152,9 +163,7 @@ const KEYBOARD_DRAG_RATIO = 0.03;
  * tap refuses against by name.
  */
 function keyboardShowing(raw: RawSnapshot): boolean {
-  if (raw.keyboard?.kind === 'visible') return true;
-  if (raw.keyboard?.kind === 'absent') return false;
-  return (raw.nodes ?? []).some((node) => KEYBOARD_TYPES.has((node.type ?? '').toLowerCase()));
+  return measuredKeyboard(raw) ?? (raw.nodes ?? []).some((node) => KEYBOARD_TYPES.has(normalizeKind(node.type ?? '')));
 }
 
 /**
@@ -491,8 +500,14 @@ export class AgentDeviceSurface {
     }
   }
 
-  /** The device selection this worker's commands take. */
-  private selection(): DeviceSelection {
+  /**
+   * The device selection this worker's commands take. A command that can
+   * run with no app open (before `app.open()`, after `closeApp()` ends the
+   * session) carries it: the daemon then resolves the device from it and
+   * not from every booted one. With a session open it names the session's
+   * own device, which agent-device accepts.
+   */
+  selection(): DeviceSelection {
     return deviceSelection(this.options.platform, this.device);
   }
 
@@ -584,6 +599,7 @@ export class AgentDeviceSurface {
       // The whole screen: an app scope refuses to start while no app is open, before `app.open()` and after `closeApp()`.
       (client) =>
         client.recording.record({
+          ...this.selection(),
           action: 'start',
           path: absolute,
           quality: 'medium',
@@ -626,7 +642,7 @@ export class AgentDeviceSurface {
    * `closeApp` leaves it.
    */
   private async stopScreenRecording(signal: AbortSignal): Promise<{ readonly outPath?: unknown }> {
-    const result = await this.command('stop video recording', (client) => client.recording.record({ action: 'stop' }), signal);
+    const result = await this.command('stop video recording', (client) => client.recording.record({ ...this.selection(), action: 'stop' }), signal);
     if (result.recordOnlySession === true) {
       this.screenReplaced();
     }
@@ -802,7 +818,7 @@ export class AgentDeviceSurface {
    */
   async closeApp(signal: AbortSignal): Promise<void> {
     const app = this.appIdentity ?? this.pinnedApp;
-    await this.command('device.closeApp', (client) => client.apps.close(app === undefined ? {} : { app }), signal);
+    await this.command('device.closeApp', (client) => client.apps.close({ ...this.selection(), ...(app === undefined ? {} : { app }) }), signal);
     this.screenReplaced();
   }
 
@@ -937,10 +953,12 @@ export class AgentDeviceSurface {
     const viewport = await this.viewportFor(projected, operation.signal);
     const location = screenLocation(raw.appBundleId ?? raw.appName ?? this.appIdentity, screenTitle(projected));
     const capture = options?.pixels === true ? await this.capturePixels(operation, projected, viewport, { normalizeStatusBar: options.comparable === true }) : undefined;
+    const keyboardVisible = measuredKeyboard(raw);
     return {
       root: screenRoot(projected.roots, viewport),
       viewport,
       ...(isTruncated(raw) ? { truncated: true } : {}),
+      ...(keyboardVisible === undefined ? {} : { keyboardVisible }),
       ...(location === undefined ? {} : { location }),
       ...(capture === undefined ? {} : { pixels: capture.pixels, maskedRegionCount: capture.masked }),
     };
@@ -1381,7 +1399,7 @@ export class AgentDeviceSurface {
     if (app === undefined) throw unsupported(`app.clearState needs the target's \`app.bundleId\`, or ${UNINSTALLED_BUILD}`);
     await this.command(
       'clear app state',
-      (client) => client.settings.update({ setting: 'clear-app-state', state: 'clear', app }),
+      (client) => client.settings.update({ ...this.selection(), setting: 'clear-app-state', state: 'clear', app }),
       operation.signal,
     );
     await this.openApp(app, { relaunch: true }, operation.signal);
@@ -1395,7 +1413,7 @@ export class AgentDeviceSurface {
    * without a hinge comes back from agent-device as `UNSUPPORTED_OPERATION`.
    */
   async fold(pose: FoldPose, signal: AbortSignal): Promise<void> {
-    await this.screenCommand('device.fold', (client) => client.command.fold({ pose }), signal);
+    await this.screenCommand('device.fold', (client) => client.command.fold({ ...this.selection(), pose }), signal);
   }
 
   /**
@@ -1409,7 +1427,7 @@ export class AgentDeviceSurface {
     }
     await this.command(
       'device.clearKeychain',
-      (client) => client.settings.update({ setting: 'reset-keychain', state: 'clear' }),
+      (client) => client.settings.update({ ...this.selection(), setting: 'reset-keychain', state: 'clear' }),
       signal,
     );
   }

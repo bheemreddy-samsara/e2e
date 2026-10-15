@@ -9,6 +9,8 @@ import type { PollScope } from './poll-scope.ts';
 
 export interface PublishedAttempt {
   readonly attemptId: string;
+  /** Host preparation may overlap a hosted attempt, but not a suite attempt. */
+  readonly owner: 'suite' | 'host';
   /** Setup tests owe their sessions and may not skip themselves. */
   readonly testKind: 'test' | 'setup';
   /** The config default for a poll's `timeout`. */

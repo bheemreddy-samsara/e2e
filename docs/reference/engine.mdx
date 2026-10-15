@@ -629,6 +629,12 @@ export interface EngineSnapshot {
    * read whole.
    */
   readonly truncated?: boolean;
+  /**
+   * Whether an on-screen keyboard is showing, as the engine measured it apart
+   * from `root`. Set `false` when it measured none, and omit it only when the
+   * engine did not measure it.
+   */
+  readonly keyboardVisible?: boolean;
   /** Semantic capture failed; only fresh, independently masked pixels are evidence. */
   readonly treeUnavailable?: true;
   /** Masked pixels, when requested and producible; omitted otherwise. */

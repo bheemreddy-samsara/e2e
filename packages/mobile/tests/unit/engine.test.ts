@@ -509,7 +509,7 @@ describe('lifecycle', () => {
     await h.engine.session!.restart!(operation());
     expect(h.fake.lastArgs('apps.open')).toEqual({ app: 'com.example.app', platform: 'ios', relaunch: true });
     await h.engine.session!.reset!(operation());
-    expect(h.fake.lastArgs('settings.update')).toEqual({ setting: 'clear-app-state', state: 'clear', app: 'com.example.app' });
+    expect(h.fake.lastArgs('settings.update')).toEqual({ platform: 'ios', setting: 'clear-app-state', state: 'clear', app: 'com.example.app' });
     expect(h.fake.methods().filter((m) => m === 'apps.install')).toHaveLength(1);
 
     // A build named by path that is the engine's own counts the same; another path pins nothing.
@@ -677,6 +677,22 @@ describe('observation', () => {
     } finally {
       vi.useRealTimers();
     }
+  });
+
+  it('reports the keyboard state the capture measured, and nothing when it measured none', async () => {
+    const h = harness();
+    await openAttempt(h);
+    expect((await h.engine.observe!(operation())).keyboardVisible).toBeUndefined();
+
+    const frame = { x: 0, y: 583, width: 390, height: 261 };
+    h.fake.respond('capture.snapshot', () => ({ ...SETTINGS_SNAPSHOT, keyboard: { kind: 'visible', frame } }));
+    expect((await h.engine.observe!(operation())).keyboardVisible).toBe(true);
+
+    h.fake.respond('capture.snapshot', () => ({ ...SETTINGS_SNAPSHOT, keyboard: { kind: 'absent' } }));
+    expect((await h.engine.observe!(operation())).keyboardVisible).toBe(false);
+
+    h.fake.respond('capture.snapshot', () => ({ ...SETTINGS_SNAPSHOT, keyboard: { kind: 'unmeasurable', reason: 'keyboard-frame-query-timeout' } }));
+    expect((await h.engine.observe!(operation())).keyboardVisible).toBeUndefined();
   });
 
   it('measures the screen in the viewport the snapshot publishes, and in its tree when it publishes none', async () => {
@@ -1360,6 +1376,24 @@ describe('device fixture', () => {
       expect(h.fake.calls.filter((call) => call.method === 'interactions.swipe')).toHaveLength(1);
     });
 
+    it('reads an XCUIElementTypeKeyboard from a WebDriver session as a shown keyboard', async () => {
+      const h = harness();
+      await openAttempt(h);
+      await observed(h, 'Back');
+      const device = fixture(h);
+      h.fake.respond('command.keyboard', NO_DISMISS_KEY);
+      const withKeys = {
+        ...SETTINGS_SNAPSHOT,
+        nodes: [
+          ...SETTINGS_NODES,
+          { ref: '@e20', index: 10, parentIndex: 0, depth: 1, type: 'XCUIElementTypeKeyboard', rect: { x: 0, y: 583, width: 390, height: 261 } },
+        ],
+      };
+      captures(h, [withKeys, SETTINGS_SNAPSHOT]);
+      await device.dismissKeyboard();
+      expect(h.fake.calls.filter((call) => call.method === 'interactions.swipe')).toHaveLength(1);
+    });
+
     it('retries a sparse capture instead of reading it as a dismissed keyboard', async () => {
       autoAdvanceTimers();
       const h = harness();
@@ -1529,24 +1563,24 @@ describe('device fixture', () => {
     await device.setClipboard('x');
     expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
       ['settings.update', { setting: 'permission', permission: 'camera', state: 'grant', platform: 'ios', app: 'Settings' }],
-      ['settings.update', { setting: 'location', state: 'set', latitude: 37.3349, longitude: -122.009 }],
-      ['settings.update', { setting: 'location', state: 'off' }],
-      ['settings.update', { setting: 'appearance', state: 'dark' }],
-      ['command.orientation', { orientation: 'landscape-left' }],
-      ['command.fold', { pose: 'half-open' }],
-      ['settings.update', { setting: 'faceid', state: 'match' }],
-      ['settings.update', { setting: 'fingerprint', state: 'nonmatch' }],
-      ['settings.update', { setting: 'touchid', state: 'enroll' }],
+      ['settings.update', { platform: 'ios', setting: 'location', state: 'set', latitude: 37.3349, longitude: -122.009 }],
+      ['settings.update', { platform: 'ios', setting: 'location', state: 'off' }],
+      ['settings.update', { platform: 'ios', setting: 'appearance', state: 'dark' }],
+      ['command.orientation', { platform: 'ios', orientation: 'landscape-left' }],
+      ['command.fold', { platform: 'ios', pose: 'half-open' }],
+      ['settings.update', { platform: 'ios', setting: 'faceid', state: 'match' }],
+      ['settings.update', { platform: 'ios', setting: 'fingerprint', state: 'nonmatch' }],
+      ['settings.update', { platform: 'ios', setting: 'touchid', state: 'enroll' }],
       ['apps.open', { app: 'Reminders', platform: 'ios', relaunch: true }],
       // The close names the app the session observed, so agent-device terminates it before the session ends.
-      ['apps.close', { app: 'com.apple.Preferences' }],
+      ['apps.close', { platform: 'ios', app: 'com.apple.Preferences' }],
       ['command.appState', {}],
-      ['command.home', {}],
+      ['command.home', { platform: 'ios' }],
       ['command.back', { settle: true, settleQuietMs: 150 }],
-      ['command.alert', { action: 'accept' }],
+      ['command.alert', { platform: 'ios', action: 'accept' }],
       ['command.keyboard', { action: 'dismiss' }],
-      ['command.clipboard', { action: 'read' }],
-      ['command.clipboard', { action: 'write', text: 'x' }],
+      ['command.clipboard', { platform: 'ios', action: 'read' }],
+      ['command.clipboard', { platform: 'ios', action: 'write', text: 'x' }],
     ]);
   });
 
@@ -1564,8 +1598,41 @@ describe('device fixture', () => {
     expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
       ['settings.update', { setting: 'permission', permission: 'microphone', state: 'reset', platform: 'ios', device: 'iPhone 16e', app: 'Settings' }],
       ['apps.open', { app: 'com.other', platform: 'ios', device: 'iPhone 16e', relaunch: true }],
-      ['apps.close', { app: 'com.apple.Preferences' }],
+      ['apps.close', { platform: 'ios', device: 'iPhone 16e', app: 'com.apple.Preferences' }],
       ['settings.update', { setting: 'permission', permission: 'camera', state: 'grant', platform: 'ios', device: 'iPhone 16e', app: 'Settings' }],
+    ]);
+  });
+
+  it('names the pinned device on device commands, so the ones after closeApp still reach it when other devices are booted, and leaves app commands to the session', async () => {
+    const udid = '2BBF3F07-AF66-4F95-82AB-BF442506FC89';
+    const h = harness({ device: udid });
+    h.fake.respond('recording.record', () => ({ recording: 'started' }));
+    h.fake.respond('command.appState', () => ({ platform: 'ios', appName: 'Settings', appBundleId: 'com.apple.Preferences' }));
+    await openAttempt(h);
+    const device = fixture(h);
+    // closeApp ends agent-device's session, so from here on only the selection says which device is meant.
+    await device.closeApp();
+    await device.clearKeychain();
+    await device.setAppearance('dark');
+    await h.engine.artifacts!.startVideo!(operation());
+    await h.engine.session!.reset!(operation());
+    // These read the app the session has open: with a selection, Android would answer for the launcher after a closeApp.
+    await device.foregroundApp();
+    await h.engine.observe!(operation());
+    await h.engine.dispose!(cleanup());
+    const selection = { platform: 'ios', udid };
+    expect(h.fake.calls.map((call) => [call.method, call.args])).toEqual([
+      ['devices.boot', selection],
+      ['apps.open', { ...selection, app: 'Settings', relaunch: true }],
+      ['apps.close', { ...selection, app: 'com.apple.Preferences' }],
+      ['settings.update', { ...selection, setting: 'reset-keychain', state: 'clear' }],
+      ['settings.update', { ...selection, setting: 'appearance', state: 'dark' }],
+      ['recording.record', expect.objectContaining({ ...selection, action: 'start' })],
+      ['settings.update', { ...selection, setting: 'clear-app-state', state: 'clear', app: 'Settings' }],
+      ['apps.open', { ...selection, app: 'Settings', relaunch: true }],
+      ['command.appState', {}],
+      ['capture.snapshot', { interactiveOnly: false }],
+      ['sessions.close', undefined],
     ]);
   });
 
@@ -1589,9 +1656,9 @@ describe('device fixture', () => {
     await device.setLocation({ latitude: 52.2297, longitude: 21.0122 });
     await device.clearLocation();
     expect(h.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
-      ['settings.update', { setting: 'location', state: 'on' }],
-      ['settings.update', { setting: 'location', state: 'set', latitude: 52.2297, longitude: 21.0122 }],
-      ['settings.update', { setting: 'location', state: 'off' }],
+      ['settings.update', { platform: 'android', setting: 'location', state: 'on' }],
+      ['settings.update', { platform: 'android', setting: 'location', state: 'set', latitude: 52.2297, longitude: 21.0122 }],
+      ['settings.update', { platform: 'android', setting: 'location', state: 'off' }],
     ]);
   });
 
@@ -1653,6 +1720,67 @@ describe('device fixture', () => {
     ]);
   });
 
+  it.each([
+    { platform: 'ios' as const, device: '73329AAC-8EB6-4AAD-B33C-8A8E911CD2A6', selection: { platform: 'ios', udid: '73329AAC-8EB6-4AAD-B33C-8A8E911CD2A6' } },
+    { platform: 'android' as const, device: 'emulator-5554', selection: { platform: 'android', serial: 'emulator-5554' } },
+    { platform: 'ios' as const, device: 'iPhone 17 Pro', selection: { platform: 'ios', device: 'iPhone 17 Pro' } },
+    { platform: 'ios' as const, device: undefined, selection: { platform: 'ios' } },
+  ])('keeps device commands on the selected $platform device after closeApp ends the previous session', async ({ platform, device, selection }) => {
+    const h = harness({ platform, device, bundleId: 'com.example.app' });
+    await openAttempt(h);
+    h.fake.respond('command.appState', () => ({ platform, appName: 'Example', appBundleId: 'com.example.app' }));
+    await fixture(h).home();
+    expect(h.fake.lastArgs('command.home')).toEqual(selection);
+    // foregroundApp reads the open session, so it carries no selection.
+    await fixture(h).foregroundApp();
+    expect(h.fake.lastArgs('command.appState')).toEqual({});
+    await h.surface.closeApp(operation().signal);
+    await h.engine.endAttempt!(cleanup());
+    await h.engine.startAttempt!({ attemptId: 'a2', artifactsDir, signal: operation().signal, resolveSecret: noSecrets, ...ignoreTrace });
+    const selected = fixture(h);
+    h.fake.respond('command.clipboard', (args) =>
+      (args as { action: string }).action === 'read' ? { action: 'read', text: 'pasted' } : { action: 'write', textLength: 1 },
+    );
+    const commands = [
+      () => selected.setLocation({ latitude: 37.3349, longitude: -122.009 }),
+      () => selected.clearLocation(),
+      () => selected.setAppearance('dark'),
+      () => selected.setOrientation('landscape-left'),
+      () => selected.fold('half-open'),
+      () => selected.setBiometrics(platform === 'ios' ? 'faceid' : 'fingerprint', 'match'),
+      () => selected.alert('accept'),
+      () => selected.clipboard(),
+      () => selected.setClipboard('x'),
+      () => selected.setPermission('camera', 'grant'),
+      // iOS refuses going offline before any command, so the radios are Android's.
+      ...(platform === 'ios' ? [
+        () => selected.enrollBiometrics('touchid', true),
+        () => selected.clearKeychain(),
+      ] : [
+        () => selected.setNetwork('offline'),
+        () => selected.setAirplaneMode(true),
+      ]),
+    ];
+    for (const command of commands) {
+      // With no session open, the close itself picks the device from the selection.
+      await h.surface.closeApp(operation().signal);
+      expect(h.fake.lastArgs('apps.close')).toMatchObject(selection);
+      const before = h.fake.calls.length;
+      await command();
+      expect(h.fake.calls.length).toBeGreaterThan(before);
+      for (const call of h.fake.calls.slice(before)) expect(call.args).toMatchObject(selection);
+    }
+    await h.surface.closeApp(operation().signal);
+    await h.engine.session!.reset!(operation());
+    expect(h.fake.lastArgs('settings.update')).toEqual({
+      ...selection,
+      setting: 'clear-app-state',
+      state: 'clear',
+      app: 'com.example.app',
+    });
+    expect(h.fake.lastArgs('apps.open')).toEqual({ ...selection, app: 'com.example.app', relaunch: true });
+  });
+
   it('presets the configured permissions and passes the launch arguments on every fresh launch of the pinned app, and on no other open', async () => {
     const h = harness({ bundleId: 'com.example.app', launchArguments: ['-e2e', 'YES'], permissions: { camera: 'grant', location: 'deny' } });
     h.fake.respond('apps.open', () => ({ session: 's', appName: 'Example', appBundleId: 'com.example.app', identifiers: {} }));
@@ -1682,14 +1810,14 @@ describe('device fixture', () => {
       permission('location', 'deny'),
       fresh,
       // A state clear resets the permissions with the data; they are put back before the relaunch.
-      ['settings.update', { setting: 'clear-app-state', state: 'clear', app: 'com.example.app' }],
+      ['settings.update', { platform: 'ios', setting: 'clear-app-state', state: 'clear', app: 'com.example.app' }],
       permission('camera', 'grant'),
       permission('location', 'deny'),
       fresh,
       // A foreground-only open, and another app, take none of the engine's options.
       open({ app: 'com.example.app' }),
       open({ app: 'com.other', relaunch: true }),
-      ['apps.close', { app: 'com.example.app' }],
+      ['apps.close', { platform: 'ios', app: 'com.example.app' }],
       permission('camera', 'grant'),
       permission('location', 'deny'),
       fresh,
@@ -1747,10 +1875,10 @@ describe('device fixture', () => {
     await radios.setAirplaneMode(true);
     await radios.setAirplaneMode(false);
     expect(android.fake.calls.slice(count).map((call) => [call.method, call.args])).toEqual([
-      ['settings.update', { setting: 'wifi', state: 'off' }],
-      ['settings.update', { setting: 'wifi', state: 'on' }],
-      ['settings.update', { setting: 'airplane', state: 'on' }],
-      ['settings.update', { setting: 'airplane', state: 'off' }],
+      ['settings.update', { platform: 'android', setting: 'wifi', state: 'off' }],
+      ['settings.update', { platform: 'android', setting: 'wifi', state: 'on' }],
+      ['settings.update', { platform: 'android', setting: 'airplane', state: 'on' }],
+      ['settings.update', { platform: 'android', setting: 'airplane', state: 'off' }],
     ]);
   });
 
@@ -1760,7 +1888,7 @@ describe('device fixture', () => {
     const before = ios.fake.calls.length;
     await fixture(ios).clearKeychain();
     expect(ios.fake.calls.slice(before).map((call) => [call.method, call.args])).toEqual([
-      ['settings.update', { setting: 'reset-keychain', state: 'clear' }],
+      ['settings.update', { platform: 'ios', setting: 'reset-keychain', state: 'clear' }],
     ]);
 
     const android = harness({ platform: 'android', bundleId: 'com.example.app' });
@@ -1786,7 +1914,7 @@ describe('device fixture', () => {
     const count = android.fake.calls.length;
     await fixture(android).fold('half-open');
     expect(android.fake.calls.slice(count).map((call) => [call.method, call.args])).toEqual([
-      ['command.fold', { pose: 'half-open' }],
+      ['command.fold', { platform: 'android', pose: 'half-open' }],
     ]);
   });
 
@@ -1863,18 +1991,42 @@ describe('video', () => {
     expect(records(h)).toHaveLength(0);
     await h.engine.artifacts!.startVideo!(operation());
     expect(h.fake.lastArgs('recording.record')).toEqual({
+      platform: 'ios',
       action: 'start',
       path: path.join(artifactsDir, 'video', 'video.mp4'),
       quality: 'medium',
       recordingScope: 'device',
     });
     const segments = await h.engine.artifacts!.stopVideo!(operation());
-    expect(h.fake.lastArgs('recording.record')).toEqual({ action: 'stop' });
+    expect(h.fake.lastArgs('recording.record')).toEqual({ platform: 'ios', action: 'stop' });
     expect(segments).toEqual([{ path: path.join('video', 'video.mp4'), startedAt: expect.any(String) }]);
     expect(Number.isNaN(Date.parse(segments[0]!.startedAt))).toBe(false);
     expect(existsSync(path.join(artifactsDir, 'video', 'video.mp4'))).toBe(true);
     await h.engine.endAttempt!(cleanup());
     expect(records(h)).toHaveLength(2);
+  });
+
+  it.each([
+    { platform: 'ios' as const, device: '73329AAC-8EB6-4AAD-B33C-8A8E911CD2A6', selection: { platform: 'ios', udid: '73329AAC-8EB6-4AAD-B33C-8A8E911CD2A6' } },
+    { platform: 'android' as const, device: 'emulator-5554', selection: { platform: 'android', serial: 'emulator-5554' } },
+    { platform: 'ios' as const, device: 'iPhone 17 Pro', selection: { platform: 'ios', device: 'iPhone 17 Pro' } },
+  ])('records and stops on the pinned $platform device after closeApp ends the previous session', async ({ platform, device, selection }) => {
+    const h = harness({ platform, device });
+    recorder(h);
+    await openAttempt(h);
+    await h.surface.closeApp(operation().signal);
+    await h.engine.endAttempt!(cleanup());
+    await h.engine.startAttempt!({ attemptId: 'a2', artifactsDir, signal: operation().signal, resolveSecret: noSecrets, ...ignoreTrace });
+    await h.engine.artifacts!.startVideo!(operation());
+    expect(h.fake.lastArgs('recording.record')).toEqual({
+      ...selection,
+      action: 'start',
+      path: path.join(artifactsDir, 'video', 'video.mp4'),
+      quality: 'medium',
+      recordingScope: 'device',
+    });
+    await h.engine.artifacts!.stopVideo!(operation());
+    expect(h.fake.lastArgs('recording.record')).toEqual({ ...selection, action: 'stop' });
   });
 
   it('records without the touch indicator when videoTouches is false', async () => {
@@ -1883,6 +2035,7 @@ describe('video', () => {
     await openAttempt(h);
     await h.engine.artifacts!.startVideo!(operation());
     expect(h.fake.lastArgs('recording.record')).toEqual({
+      platform: 'ios',
       action: 'start',
       path: path.join(artifactsDir, 'video', 'video.mp4'),
       quality: 'medium',
@@ -1908,7 +2061,7 @@ describe('video', () => {
     const before = records(h).length;
     await h.engine.endAttempt!(cleanup());
     expect(records(h)).toHaveLength(before + 1);
-    expect(h.fake.lastArgs('recording.record')).toEqual({ action: 'stop' });
+    expect(h.fake.lastArgs('recording.record')).toEqual({ platform: 'ios', action: 'stop' });
   });
 
   it('stops a start that outlived its budget, and keeps a recording whose stop failed for endAttempt', async () => {
@@ -1953,7 +2106,7 @@ describe('video', () => {
     expect(stops).toBe(2);
     await h.engine.endAttempt!(cleanup());
     expect(stops).toBe(3);
-    expect(h.fake.lastArgs('recording.record')).toEqual({ action: 'stop' });
+    expect(h.fake.lastArgs('recording.record')).toEqual({ platform: 'ios', action: 'stop' });
   });
 });
 

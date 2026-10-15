@@ -41,6 +41,8 @@ jobs:
         run: pnpm docs:check-errors
       - name: Peer ranges on the runner
         run: pnpm check:peer-ranges
+      - name: Changeset bumps on 0.x packages
+        run: pnpm check:changeset-bumps
       - name: No install scripts in published dependency trees
         run: pnpm check:install-scripts
       - name: Plugin package matches its sources
