@@ -9,6 +9,7 @@ import { processSecrets, registerStaticSecrets } from './secrecy.ts';
 import { selectTarget } from './select-target.ts';
 import { openStandaloneHost } from './standalone.ts';
 import type { StepProgress, StepRecord } from './steps.ts';
+import type { Report1Document } from '../report/build.ts';
 
 export interface OpenHostOptions {
   /** Config search directory, or project root of a config value; default `process.cwd()`. */
@@ -59,6 +60,8 @@ export interface E2ESession<Fixtures extends object = Record<string, unknown>> e
   /** Absolute per-session trace path. Written before close settles successfully. */
   readonly tracePath: string;
   steps(): readonly StepRecord[];
+  /** A fresh Report1 snapshot after close and a successful trace write; undefined while live or closing. */
+  report(): Report1Document | undefined;
   /** Idempotent. Returns soft assertion, abandoned-operation, and cleanup failures. Disposal throws them as AggregateError. */
   close(): Promise<readonly SerializedError[]>;
 }
@@ -98,7 +101,7 @@ async function openHostWorker<Fixtures extends object>(options: OpenHostOptions)
         runId: attempt.runId, attemptId: attempt.attemptId, target: target.name,
         fixtures: attempt.fixtures as TestFixtures & Fixtures,
         artifactsDir: attempt.artifactsDir, tracePath: attempt.tracePath,
-        steps: () => attempt.steps.all(), close: attempt.close,
+        steps: () => attempt.steps.all(), report: attempt.report, close: attempt.close,
         [Symbol.asyncDispose]: () => dispose(attempt.close, 'session'),
       };
     }),

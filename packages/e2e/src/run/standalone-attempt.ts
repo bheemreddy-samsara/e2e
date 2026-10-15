@@ -20,6 +20,7 @@ import { classifyAttemptStatus, type ClosingRecord, type TargetExecutor } from '
 import { createFixtures } from './fixtures.ts';
 import { writeHostTrace } from './host-trace.ts';
 import type { AttemptRecord } from './records.ts';
+import type { Report1Document } from '../report/build.ts';
 import { holdSecretRegistry } from '../secrets.ts';
 import { processSecrets, redactForSession, sessionSecrecy } from './secrecy.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
@@ -53,6 +54,7 @@ export interface StandaloneAttempt {
   readonly budget: AttemptBudget;
   readonly artifactsDir: string;
   readonly tracePath: string;
+  report(): Report1Document | undefined;
   close(): Promise<readonly SerializedError[]>;
 }
 
@@ -192,6 +194,8 @@ export async function launchAttempt(
   const startedMs = Date.now();
   const tracePath = path.join(artifacts.dir, 'trace.md');
   let ending: Promise<readonly SerializedError[]> | undefined;
+  let report: Report1Document | undefined;
+  let closed = false;
   const close = (): Promise<readonly SerializedError[]> => {
     ending ??= (async () => {
       clearTimeout(expiry);
@@ -214,8 +218,10 @@ export async function launchAttempt(
       if (worker.kind === 'hosted') {
         try {
           const { error, status } = verdict();
-          await writeHostTrace({
+          report = await writeHostTrace({
             config, target, runId, testId: identity.testId, agent, tracePath, redact,
+            redactCut: sessionSecrecy(opened, config.allSecrets).ledger.redactCut,
+            redactFragments: sessionSecrecy(opened, config.allSecrets).ledger.redactFragments,
             title: processSecrets.redact(redact(options.name ?? target.name)),
             resultsDir: worker.resultsDir, segments: identity.segments,
             attempt: {
@@ -230,6 +236,7 @@ export async function launchAttempt(
         await onClosed({ cleanup: record.cleanup });
       } finally {
         reservation.release();
+        closed = true;
       }
       return attemptErrors;
     })();
@@ -238,6 +245,7 @@ export async function launchAttempt(
   return {
     runId, attemptId, fixtures: acquired.fixtures, agentRuntime: acquired.agentRuntime, session: opened, steps, budget,
     artifactsDir: artifacts.dir, tracePath, close,
+    report: () => closed && report !== undefined ? structuredClone(report) : undefined,
   };
 }
 

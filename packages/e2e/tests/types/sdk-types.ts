@@ -714,6 +714,9 @@ void (session.fixtures.device.tap satisfies () => void);
 void (session.artifactsDir satisfies string);
 void (session.tracePath satisfies string);
 void (session.steps() satisfies readonly StepRecord[]);
+void (session.report() satisfies import('../../src/types.ts').Report | undefined);
+// @ts-expect-error report is synchronous, not a promise
+void (session.report() satisfies Promise<unknown>);
 void (session.close() satisfies Promise<readonly SerializedError[]>);
 void (session satisfies AsyncDisposable);
 void (session[Symbol.asyncDispose]() satisfies PromiseLike<void>);
