@@ -2,4 +2,4 @@
 "e2e": minor
 ---
 
-After close, `session.report()` returns the hosted session's `Report`.
+After close and a successful trace write, `session.report()` returns the hosted session's `Report`.

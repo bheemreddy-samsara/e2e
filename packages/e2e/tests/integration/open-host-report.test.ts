@@ -1,16 +1,25 @@
 /** Hosted sessions expose their trace report after close without transferring ownership. */
 import { mkdirSync, mkdtempSync, readFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import path from 'node:path';
 import { describe, expect, it } from 'vitest';
 import { createFakeEngine, FAKE_APP } from '../helpers/fake-engine.ts';
-import { openHost, sdkExpect, type GadgetFixtures } from '../helpers/open-host.ts';
+import { gate, openHost, sdkExpect, type GadgetFixtures } from '../helpers/open-host.ts';
 import { assertValidReport } from '../helpers/report-schema.ts';
 
 describe('openHost: report', { timeout: 60_000 }, () => {
   it('returns independent closed reports that remain stable across host reuse', async () => {
-    const dir = mkdtempSync('/tmp/e2e-host-report-');
+    const dir = mkdtempSync(path.join(tmpdir(), 'e2e-host-report-'));
     try {
-      const fake = createFakeEngine({ fixtures: true, artifacts: true });
+      const entered = gate();
+      const release = gate();
+      const fake = createFakeEngine({
+        fixtures: true, artifacts: true,
+        async onSettleAttempt() {
+          entered.resolve();
+          await release.promise;
+        },
+      });
       const opened = await openHost<GadgetFixtures>({
         cwd: dir, env: {},
         config: { targets: [{ name: 'kiosk', platform: 'kiosk', engine: fake.engine, app: FAKE_APP }] },
@@ -22,7 +31,14 @@ describe('openHost: report', { timeout: 60_000 }, () => {
           await session.fixtures.app.screenshot();
           await session.fixtures.gadget.dropFile();
           sdkExpect.soft(1).toBe(2);
-          expect(await session.close()).toHaveLength(1);
+          const closing = session.close();
+          try {
+            await entered.promise;
+            expect(session.report()).toBeUndefined();
+          } finally {
+            release.resolve();
+          }
+          expect(await closing).toHaveLength(1);
           const report = session.report()!;
           assertValidReport(report);
           expect(report.run.status).toBe('failed');
@@ -51,6 +67,7 @@ describe('openHost: report', { timeout: 60_000 }, () => {
           }
           expect(await session.close()).toHaveLength(1);
         } finally {
+          release.resolve();
           await session.close();
         }
       } finally {
@@ -62,7 +79,7 @@ describe('openHost: report', { timeout: 60_000 }, () => {
   });
 
   it('returns undefined when the trace write fails', async () => {
-    const dir = mkdtempSync('/tmp/e2e-host-report-');
+    const dir = mkdtempSync(path.join(tmpdir(), 'e2e-host-report-'));
     try {
       const fake = createFakeEngine();
       const opened = await openHost({
