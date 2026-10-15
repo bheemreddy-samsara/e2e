@@ -3,13 +3,12 @@
 import { discoverConfig, loadConfigModule, missingConfigError } from '../config/load.ts';
 import { resolveConfig, type ResolvedConfig } from '../config/resolve.ts';
 import { classifyError, ConfigurationError, E2EError, serializeError, type SerializedError } from '../internal/errors.ts';
-import type { E2EConfig, TestFixtures } from '../types.ts';
+import type { E2EConfig, Report, TestFixtures } from '../types.ts';
 import { allocateTargetPorts } from './app-ports.ts';
 import { processSecrets, registerStaticSecrets } from './secrecy.ts';
 import { selectTarget } from './select-target.ts';
 import { openStandaloneHost } from './standalone.ts';
 import type { StepProgress, StepRecord } from './steps.ts';
-import type { Report1Document } from '../report/build.ts';
 
 export interface OpenHostOptions {
   /** Config search directory, or project root of a config value; default `process.cwd()`. */
@@ -60,8 +59,8 @@ export interface E2ESession<Fixtures extends object = Record<string, unknown>> e
   /** Absolute per-session trace path. Written before close settles successfully. */
   readonly tracePath: string;
   steps(): readonly StepRecord[];
-  /** A fresh Report1 snapshot after close and a successful trace write; undefined while live or closing. */
-  report(): Report1Document | undefined;
+  /** The session Report after close and a successful trace write; otherwise undefined. */
+  report(): Report | undefined;
   /** Idempotent. Returns soft assertion, abandoned-operation, and cleanup failures. Disposal throws them as AggregateError. */
   close(): Promise<readonly SerializedError[]>;
 }

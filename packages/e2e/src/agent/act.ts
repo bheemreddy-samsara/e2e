@@ -17,7 +17,6 @@
  */
 
 import type { StepTurn } from '../run/steps.ts';
-import { redactRecordedTurn } from '../run/turn-cuts.ts';
 import { writeFileSync } from 'node:fs';
 import { writeFile } from 'node:fs/promises';
 import { join } from 'node:path';
@@ -320,7 +319,11 @@ class ActDispatch {
       attachTurns: (turns) => {
         // Model prose and tool output are not model input, but they are a
         // record: the redactor that guards the tree guards the turns.
-        this.turns = turns.map((turn) => redactRecordedTurn(turn, this.runtime.redact));
+        this.turns = turns.map((turn) => ({
+          index: turn.index,
+          calls: turn.calls.map((call) => this.runtime.redact(call)),
+          outcome: this.runtime.redact(turn.outcome),
+        }));
       },
       attachScreenshot: (pixels, label) => this.attachScreenshot(pixels, label),
       actions: this.dispatcher.actions,

@@ -12,7 +12,6 @@
  */
 
 import type { StepTurn } from '../run/steps.ts';
-import { recordTurnCuts } from '../run/turn-cuts.ts';
 import type { AssistantModelMessage, ModelMessage, StepResult, ToolCallPart, ToolSet } from 'ai';
 import { asSdkLanguageModel, loadAiSdk, type AiSdk, type SdkLanguageModel } from './ai-sdk.ts';
 import { MODEL_REQUEST_HEADERS } from '../internal/client-identity.ts';
@@ -724,14 +723,11 @@ class LoopRun {
   private attachTranscript(): void {
     if (this.turns.length === 0 && this.preamble.length === 0) return;
     this.context.attachTurns(
-      this.turns.slice(-MAX_REPORTED_TURNS).map((turn) => {
-        const calls = turn.calls.slice(0, MAX_REPORTED_CALLS);
-        const cuts: number[] = [];
-        const outcome = reportedOutcome(turn, cuts);
-        return recordTurnCuts({ index: turn.index,
-          calls: calls.map((call) => truncate(call, MAX_REPORTED_CALL_CHARS)), outcome,
-        }, calls.map((call) => call.length > MAX_REPORTED_CALL_CHARS ? [MAX_REPORTED_CALL_CHARS] : []), cuts);
-      }),
+      this.turns.slice(-MAX_REPORTED_TURNS).map((turn) => ({
+        index: turn.index,
+        calls: turn.calls.slice(0, MAX_REPORTED_CALLS).map((call) => truncate(call, MAX_REPORTED_CALL_CHARS)),
+        outcome: reportedOutcome(turn),
+      })),
     );
     const transcript = [
       ...this.preamble,
@@ -746,13 +742,10 @@ class LoopRun {
  * loop's notes after them, clipped apart, since they come last and one clip
  * would drop them.
  */
-function reportedOutcome(turn: LoopTurn, cuts: number[]): string {
+function reportedOutcome(turn: LoopTurn): string {
   const outcome = truncate(turn.outcome, MAX_REPORTED_OUTCOME_CHARS);
-  if (turn.outcome.length > MAX_REPORTED_OUTCOME_CHARS) cuts.push(MAX_REPORTED_OUTCOME_CHARS);
   if (turn.notes.length === 0) return outcome;
-  const notes = turn.notes.join('\n');
-  if (notes.length > MAX_REPORTED_NOTES_CHARS) cuts.push(outcome.length + 1 + MAX_REPORTED_NOTES_CHARS);
-  return `${outcome}\n${truncate(notes, MAX_REPORTED_NOTES_CHARS)}`;
+  return `${outcome}\n${truncate(turn.notes.join('\n'), MAX_REPORTED_NOTES_CHARS)}`;
 }
 
 function appendNotice(messages: ModelMessage[], content: string): ModelMessage[] {

@@ -13,14 +13,13 @@ import { classifyError, ConfigurationError, InfrastructureError, serializeError,
 import { resultId, timestamp, uuidv7 } from '../internal/ids.ts';
 import { Deadline, MAX_TIMER_MS, withTimeout } from '../internal/time.ts';
 import { attemptVideo } from '../internal/recording-modes.ts';
-import type { TestFixtures } from '../types.ts';
+import type { Report, TestFixtures } from '../types.ts';
 import { createAttemptArtifacts, resultSegment } from './artifacts.ts';
 import { AttemptBudget } from './budget.ts';
 import { classifyAttemptStatus, type ClosingRecord, type TargetExecutor } from './execute.ts';
 import { createFixtures } from './fixtures.ts';
 import { writeHostTrace } from './host-trace.ts';
 import type { AttemptRecord } from './records.ts';
-import type { Report1Document } from '../report/build.ts';
 import { holdSecretRegistry } from '../secrets.ts';
 import { processSecrets, redactForSession, sessionSecrecy } from './secrecy.ts';
 import { StepRecorder, type StepProgress } from './steps.ts';
@@ -54,7 +53,7 @@ export interface StandaloneAttempt {
   readonly budget: AttemptBudget;
   readonly artifactsDir: string;
   readonly tracePath: string;
-  report(): Report1Document | undefined;
+  report(): Report | undefined;
   close(): Promise<readonly SerializedError[]>;
 }
 
@@ -194,7 +193,7 @@ export async function launchAttempt(
   const startedMs = Date.now();
   const tracePath = path.join(artifacts.dir, 'trace.md');
   let ending: Promise<readonly SerializedError[]> | undefined;
-  let report: Report1Document | undefined;
+  let report: Report | undefined;
   let closed = false;
   const close = (): Promise<readonly SerializedError[]> => {
     ending ??= (async () => {
@@ -220,8 +219,6 @@ export async function launchAttempt(
           const { error, status } = verdict();
           report = await writeHostTrace({
             config, target, runId, testId: identity.testId, agent, tracePath, redact,
-            redactCut: sessionSecrecy(opened, config.allSecrets).ledger.redactCut,
-            redactFragments: sessionSecrecy(opened, config.allSecrets).ledger.redactFragments,
             title: processSecrets.redact(redact(options.name ?? target.name)),
             resultsDir: worker.resultsDir, segments: identity.segments,
             attempt: {

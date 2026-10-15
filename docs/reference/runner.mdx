@@ -212,7 +212,7 @@ An `end` event includes `status`, `durationMs`, `modelCalls`, and a redacted
 | `fixtures` | `agent`, `app`, `screen`, `platform`, and the engine's fixtures, typed as `TestFixtures & Fixtures` |
 | `runId`, `attemptId`, `target` | Host run and target, plus a unique attempt id |
 | `steps()` | Read-only `StepRecord`s for steps run so far, as the [report](/reference/reporters) records them |
-| `report()` | Synchronous, fresh `Report` copy after close and a successful trace write; otherwise `undefined` |
+| `report()` | The session `Report` after close and a successful trace write; otherwise `undefined` |
 | `artifactsDir` | Absolute directory for this attempt's screenshots, recordings, and trace |
 | `tracePath` | Absolute string path to `trace.md`; attach or read it after `close()` settles |
 | `close()` | Cancels remaining operations, ends the attempt, and writes its trace. Returns soft expectation and cleanup failures as `Promise<readonly SerializedError[]>` instead of throwing them |
@@ -248,9 +248,9 @@ was named.
 
 <Note>
 A hosted session writes its trace, not `report.json`. After close,
-`report()` returns the existing Report1 document used to render that trace.
+`session.report()` returns the session `Report` used to render that trace.
 Its status describes the SDK session, not your runner's test-body verdict.
-Artifact paths resolve under `<output>/results`, not `session.artifactsDir`.
+Artifact paths are relative to `<output>/results`, not `session.artifactsDir`.
 Your runner owns retries and reporting; use `onStep`, `steps()`, `report()`,
 and `close()`'s failures. Video follows
 the target's mode for a first attempt, including retaining failure-only video
