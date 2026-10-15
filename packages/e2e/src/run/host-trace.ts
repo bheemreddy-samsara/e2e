@@ -27,7 +27,7 @@ export interface HostTraceOptions {
   readonly redact: (text: string) => string;
 }
 
-/** Writes one session's trace page as a single-result run, so it reads like `e2e run`'s. */
+/** Writes one session's trace page as a single-result run and returns its Report. */
 export async function writeHostTrace(options: HostTraceOptions): Promise<Report> {
   const { config, attempt, title } = options;
   const status = attempt.status;

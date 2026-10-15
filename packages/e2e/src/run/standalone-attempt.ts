@@ -194,7 +194,6 @@ export async function launchAttempt(
   const tracePath = path.join(artifacts.dir, 'trace.md');
   let ending: Promise<readonly SerializedError[]> | undefined;
   let report: Report | undefined;
-  let closed = false;
   const close = (): Promise<readonly SerializedError[]> => {
     ending ??= (async () => {
       clearTimeout(expiry);
@@ -233,7 +232,6 @@ export async function launchAttempt(
         await onClosed({ cleanup: record.cleanup });
       } finally {
         reservation.release();
-        closed = true;
       }
       return attemptErrors;
     })();
@@ -242,7 +240,7 @@ export async function launchAttempt(
   return {
     runId, attemptId, fixtures: acquired.fixtures, agentRuntime: acquired.agentRuntime, session: opened, steps, budget,
     artifactsDir: artifacts.dir, tracePath, close,
-    report: () => closed && report !== undefined ? structuredClone(report) : undefined,
+    report: () => report && structuredClone(report),
   };
 }
 
