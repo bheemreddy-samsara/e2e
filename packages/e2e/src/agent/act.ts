@@ -109,10 +109,13 @@ export async function runActStep(
 export async function runAssertStep(
   runtime: AgentContext,
   assertion: string,
-  options: { timeout?: number; vision?: VisionMode; screenshot?: boolean; agent?: string } | undefined,
+  options: { timeout?: number; vision?: VisionMode; screenshot?: boolean; agent?: string; screenshotPolicy?: 'redacted-after-secrets' } | undefined,
 ): Promise<void> {
   const normalized = validateInstruction(assertion, 'agent.assert');
   const agent = runtime.select(options?.agent);
+  if (options?.screenshotPolicy !== undefined) {
+    throw new ConfigurationError('UNSUPPORTED_CAPABILITY', 'agent.assert screenshotPolicy requires the built-in judge; custom executors cannot consume capture-bound redaction proof');
+  }
   const vision = resolveVision(options?.vision);
   if (options?.vision !== undefined && agent.executor.vision !== true) {
     throw new ConfigurationError(

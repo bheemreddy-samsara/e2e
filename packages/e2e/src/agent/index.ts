@@ -67,7 +67,7 @@ const VISION_HINT_UNPROVEN =
 
 const WAIT_FOR_KEYS = ['timeout', 'interval', 'maxModelCalls', 'vision', 'agent'] as const;
 const EXTRACT_KEYS = ['schema', 'timeout', 'vision', 'agent'] as const;
-const ASSERT_KEYS = ['timeout', 'screenshot', 'vision', 'agent'] as const;
+const ASSERT_KEYS = ['timeout', 'screenshot', 'vision', 'agent', 'screenshotPolicy'] as const;
 
 /** Builds the agent fixture for one attempt. */
 export function createAgentFixture(runtime: AgentContext): Agent {
@@ -241,6 +241,10 @@ export function createAgentFixture(runtime: AgentContext): Agent {
 
     assert(assertion, options) {
       rejectUnknownOptions('agent.assert', options, ASSERT_KEYS);
+      if (options?.screenshotPolicy !== undefined &&
+        (options.screenshotPolicy !== 'redacted-after-secrets' || options.vision !== 'only')) {
+        throw new TestError('INVALID_ARGUMENT', "agent.assert screenshotPolicy must be 'redacted-after-secrets' with vision: 'only'");
+      }
       // A custom executor judges assertions through the socket: swapping
       // brains swaps all the thinking. The built-in path keeps the optimized
       // judgment tier below: one call, plus one repair round for a response
@@ -255,6 +259,7 @@ export function createAgentFixture(runtime: AgentContext): Agent {
           api: 'agent.assert',
           agent: options?.agent,
           task: 'judge whether an assertion holds',
+          ...(options?.screenshotPolicy === undefined ? {} : { screenshotPolicy: options.screenshotPolicy }),
           timeoutMs: resolveTimeout(options?.timeout, config.judgmentTimeout),
           maxModelCalls: ASSERT_MODEL_CALLS,
           vision,

@@ -40,7 +40,7 @@ export class SecretExposure {
     this.current = level;
   }
 
-  /** Whether no pixels may reach a model: no screenshot goes into model input, pixel tools, or an MCP client. */
+  /** Whether default consumers withhold model pixels. Capture-bound assertion proof never clears this state. */
   get withholdsModelPixels(): boolean {
     return this.current === 'filled';
   }

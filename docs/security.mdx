@@ -21,6 +21,12 @@ attempt, because the app could show the value anywhere. Every known secret value
 `<secret:name>` in model input, reports, console output, and `.txt`,
 `.csv`, `.json`, `.html`, and `.htm` downloads.
 
+The built-in assertion has an explicit
+[`redacted-after-secrets` policy](/reference/agent#post-secret-assertion-policy).
+It accepts only an engine's complete, capture-bound full-frame redaction
+attestation plus proven secure-field masking. It never clears session taint.
+The shipped web and mobile engines do not yet provide that attestation.
+
 ## What can still leak
 
 Redaction matches strings, and only a secret fill turns model screenshots off:

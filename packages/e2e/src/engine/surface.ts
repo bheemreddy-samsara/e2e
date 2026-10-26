@@ -95,6 +95,8 @@ interface ObservationMetadata {
    * withholds the pixels and keeps the tree.
    */
   readonly redaction: {
+    /** A capture-bound full-frame attestation validated by the engine adapter. */
+    readonly secretRedactionChallenge?: string;
     readonly secureNodeCount: number;
     readonly maskedRegionCount: number;
   };

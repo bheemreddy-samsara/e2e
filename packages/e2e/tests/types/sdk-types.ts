@@ -549,6 +549,13 @@ await agent.act('open billing', { vision: true });
 await agent.act('pick the red pin', { vision: 'only' });
 await agent.assert('the chart trends upward', { vision: true });
 await agent.assert('the form is not covered', { vision: 'only' });
+await agent.assert('the signed-in page is visible', { vision: 'only', screenshotPolicy: 'redacted-after-secrets' });
+// @ts-expect-error screenshot policy is assertion-only
+await agent.waitFor('ready', { vision: 'only', screenshotPolicy: 'redacted-after-secrets' });
+// @ts-expect-error no unsafe screenshot policy
+await agent.assert('ready', { vision: 'only', screenshotPolicy: 'unsafe' });
+// @ts-expect-error actions cannot opt in to post-secret pixels
+await agent.act('sign in', { screenshotPolicy: 'redacted-after-secrets' });
 // @ts-expect-error a judgment's vision is a closed set: true, false, or 'only'
 await agent.assert('the chart trends upward', { vision: 'always' });
 await agent.waitFor('the page settles', { interval: 500, maxModelCalls: 3 });

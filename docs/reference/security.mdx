@@ -140,6 +140,12 @@ model never sees or picks it.
 
 ### Screenshots after a secret fill
 
+The default rules below remain in force. The built-in assertion's explicit
+[`redacted-after-secrets` policy](/reference/agent#post-secret-assertion-policy)
+requires complete, capture-bound engine proof plus secure-field masking;
+it does not clear taint. Neither shipped web nor mobile engine supplies
+that proof yet. No other consumer gains this exception.
+
 After any secret fill, no pixels reach a model for the rest of the attempt:
 
 - screenshot and pixel tools are unavailable,

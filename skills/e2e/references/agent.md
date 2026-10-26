@@ -225,6 +225,12 @@ await agent.waitFor('the export finished and a download link appeared', { timeou
   accept absence, ask for it (`'the phone, or null when none is shown'`
   with `.nullable()`).
 
+`agent.assert` alone also accepts
+`{ vision: 'only', screenshotPolicy: 'redacted-after-secrets' }`. It requires
+complete, capture-bound engine redaction evidence and never resets secret
+taint. The shipped web and mobile engines cannot supply that evidence yet;
+do not use this as a workaround for `PIXEL_TAINTED`. Custom executors reject it.
+
 `vision` on a judgment picks the evidence: `false` (default) the tree;
 `true` the tree plus a masked screenshot; `'only'` the screenshot alone, for
 what the screen presents (an overlay, a broken layout, a chart) where the

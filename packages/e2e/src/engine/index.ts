@@ -602,6 +602,8 @@ export interface EngineDisposeContext extends EngineCleanupContext {
 }
 
 export interface EngineObserveOptions {
+  /** Opaque request id for full-frame redaction of all filled session secrets. An engine unable to guarantee this must omit `secretRedaction` from its snapshot. */
+  readonly secretRedactionChallenge?: string;
   /** Requests masked viewport pixels for the same revision as the tree. */
   readonly pixels?: boolean;
   /** Allows independently masked pixels to replace a failed semantic capture. Never granted after a secret fill. */
@@ -665,6 +667,13 @@ export interface EngineSnapshot {
   readonly treeUnavailable?: true;
   /** Masked pixels, when requested and producible; omitted otherwise. */
   readonly pixels?: ObservationPixels;
+  /**
+   * Attests that these pixels redact every filled session secret, including echoes
+   * outside secure fields. Echo only this capture's requested challenge after
+   * establishing complete coverage. Secure-field masks or a new screen alone
+   * cannot establish it. Omit when unsupported or coverage is uncertain.
+   */
+  readonly secretRedaction?: { readonly challenge: string; readonly complete: true };
   /** Regions masked in `pixels`; the harness checks it covers every secure node. */
   readonly maskedRegionCount?: number;
 }

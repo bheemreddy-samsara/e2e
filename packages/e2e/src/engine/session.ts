@@ -362,6 +362,7 @@ export function createEngineSession(options: EngineSessionOptions): TargetSessio
           ...(observeOptions?.pixels === true ? { pixels: true } : {}),
           ...(observeOptions?.pixelFallback === true ? { pixelFallback: true } : {}),
           ...(observeOptions?.comparable === true ? { comparable: true } : {}),
+          ...(observeOptions?.secretRedactionChallenge === undefined ? {} : { secretRedactionChallenge: observeOptions.secretRedactionChallenge }),
         },
       );
       const minted = `${OBSERVE_REVISION_PREFIX}${revision + 1}`;
@@ -374,6 +375,11 @@ export function createEngineSession(options: EngineSessionOptions): TargetSessio
         redaction: {
           secureNodeCount: countSecure(snapshot.root),
           maskedRegionCount: snapshot.maskedRegionCount ?? 0,
+          ...(observeOptions?.secretRedactionChallenge !== undefined &&
+            snapshot.secretRedaction?.complete === true &&
+            snapshot.secretRedaction.challenge === observeOptions.secretRedactionChallenge
+            ? { secretRedactionChallenge: observeOptions.secretRedactionChallenge }
+            : {}),
         },
       };
       if (snapshot.treeUnavailable === true) {

@@ -15,6 +15,7 @@ import type {
   EngineHandle,
   EngineInitInfo,
   EngineObserveOptions,
+  EngineSnapshot,
   EngineState,
   LocatorAction,
   LocatorActionKind,
@@ -114,7 +115,7 @@ export interface FakeEngineBehavior {
   pixels?(
     options: EngineObserveOptions,
     attemptIndex: number,
-  ): { readonly pixels: ObservationPixels; readonly maskedRegionCount?: number } | undefined;
+  ): ({ readonly pixels: ObservationPixels; readonly maskedRegionCount?: number } & Pick<EngineSnapshot, 'secretRedaction'>) | undefined;
   /**
    * A scripted screen, built once per attempt with a stage for timed
    * mutations: `observe` reports it, `locate` resolves over it with the
@@ -296,6 +297,7 @@ export function createFakeEngine(behavior: FakeEngineBehavior = {}): FakeEngineH
         root: scene?.root() ?? tree,
         viewport: FAKE_VIEWPORT,
         ...(captured === undefined ? {} : { pixels: captured.pixels, maskedRegionCount: captured.maskedRegionCount ?? 0 }),
+        ...(captured?.secretRedaction === undefined ? {} : { secretRedaction: captured.secretRedaction }),
       };
     },
     actions: behavior.actions ?? LOCATOR_ACTION_KINDS.filter((kind) => kind !== 'swipe'),

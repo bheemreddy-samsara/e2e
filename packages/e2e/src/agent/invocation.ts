@@ -27,6 +27,7 @@ import type {
   StepRecorder,
   VisionDegradation,
 } from '../run/steps.ts';
+import { randomUUID } from 'node:crypto';
 import type { VisionMode } from '../types.ts';
 import { AgentError } from './error.ts';
 import { ModelUsage, reasoningField, tokenFields } from './usage.ts';
@@ -140,6 +141,8 @@ export interface InvocationOptions {
    * call.
    */
   readonly vision: VisionMode;
+  /** Assertion-only opt-in; never clears the session's exposure. */
+  readonly screenshotPolicy?: 'redacted-after-secrets';
 }
 
 /**
@@ -226,16 +229,20 @@ export class Invocation {
   /** Captures and redacts one fresh observation. */
   async observe(): Promise<AgentObservation> {
     this.checkDeadline();
-    const pixels = this.pixelsRequested();
+    const requestAttestation = this.options.screenshotPolicy === 'redacted-after-secrets' && this.runtime.exposure.withholdsModelPixels;
+    const pixels = this.pixelsRequested(requestAttestation);
+    let attested = false;
     const observation = await this.instrument(
       { kind: 'observation', phase: 'agent.observe' },
       async () => {
-        const raw = await this.captureObservation(pixels);
+        const capture = await this.captureObservation(pixels, requestAttestation);
+        const raw = capture.observation;
+        attested = capture.attested;
         const prepared = prepareObservation(raw, {
           redact: this.runtime.redact,
           redactCut: this.runtime.redactCut,
           maxBytes: this.observationByteBudget(),
-          pixelsAllowed: this.options.vision !== false && !this.runtime.exposure.withholdsModelPixels,
+          pixelsAllowed: this.options.vision !== false && (!this.runtime.exposure.withholdsModelPixels || attested),
           appOrigin: this.runtime.app.base?.origin,
         });
         return prepared;
@@ -250,14 +257,23 @@ export class Invocation {
     if (observation.kind === 'semantic' && observation.truncated) {
       this.observationTruncated = true;
     }
-    if (pixels || observation.kind === 'pixels') this.recordPixels(observation);
+    if (pixels || observation.kind === 'pixels') this.recordPixels(observation, attested);
     return observation;
   }
 
   /** Captures one raw observation through the shared race-hardened path. */
-  private captureObservation(pixels: boolean): Promise<Observation> {
-    return retryingObserve({
-      observe: (operation, pixelFallback) => this.session.observe(operation, { pixels, pixelFallback }),
+  private async captureObservation(pixels: boolean, requestAttestation: boolean): Promise<{ observation: Observation; attested: boolean }> {
+    let attested = false;
+    const observation = await retryingObserve({
+      observe: async (operation, pixelFallback) => {
+        const challenge = requestAttestation ? randomUUID() : undefined;
+        const capture = await this.session.observe(operation, {
+          pixels, pixelFallback,
+          ...(challenge === undefined ? {} : { secretRedactionChallenge: challenge }),
+        });
+        attested = challenge !== undefined && capture.redaction.secretRedactionChallenge === challenge;
+        return capture;
+      },
       operation: () => this.operation(),
       guard: (cause) => this.checkDeadline(cause),
       signal: this.runtime.engine.signal,
@@ -265,6 +281,7 @@ export class Invocation {
       fallback: this.options.vision !== false,
       tainted: () => this.runtime.exposure.withholdsModelPixels,
     });
+    return { observation, attested };
   }
 
   /**
@@ -272,9 +289,9 @@ export class Invocation {
    * the call to tree-only input instead of failing it: the tree is still fully
    * redacted, and only the unprovable evidence is dropped.
    */
-  private pixelsRequested(): boolean {
+  private pixelsRequested(attestationRequested: boolean): boolean {
     if (!this.pixelTier) return false;
-    if (this.runtime.exposure.withholdsModelPixels) {
+    if (this.runtime.exposure.withholdsModelPixels && !attestationRequested) {
       this.loseVision('PIXEL_TAINTED');
       return false;
     }
@@ -282,8 +299,8 @@ export class Invocation {
   }
 
   /** Records whether requested pixels actually became model input. */
-  private recordPixels(observation: AgentObservation): void {
-    const outcome = pixelsForModel(observation, this.runtime.exposure.withholdsModelPixels);
+  private recordPixels(observation: AgentObservation, attested: boolean): void {
+    const outcome = pixelsForModel(observation, this.runtime.exposure.withholdsModelPixels, attested);
     if ('withheld' in outcome) {
       this.loseVision(outcome.withheld);
       return;

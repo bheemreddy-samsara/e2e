@@ -880,6 +880,17 @@ export interface EngineDisposeContext extends EngineCleanupContext {
 | `pixels` | `ObservationPixels` |
 | `maskedRegionCount` | `number` |
 
+A built-in assertion opting into post-secret pixels may pass
+`EngineObserveOptions.secretRedactionChallenge`, a new opaque string for
+that capture. An engine can return
+`EngineSnapshot.secretRedaction: { challenge, complete: true }` only after
+redacting **all filled session secrets throughout those pixels**, including
+echoes outside secure fields. Echoing the token without such coverage is a
+contract violation. The adapter drops missing, incomplete or nonmatching
+attestations. Mask counts must still cover every secure node.
+Do not infer safety from navigation, an empty tree or password-field masks.
+The shipped web and mobile engines do not implement this stronger redaction.
+
 Return the surface as it is right now. The runner mints the revision and
 stamps it onto every ref. When `pixels` are present, it checks that
 `maskedRegionCount` covers every `secure` node. A valid empty tree may have a

@@ -437,6 +437,31 @@ Pixels are withheld, and the tree is sent alone, when:
 
 In `'only'` mode those cases fail with `POLICY_DENIED` instead.
 
+### Post-secret assertion policy
+
+Only the built-in `agent.assert` accepts this opt-in:
+
+```ts
+await agent.assert('the authenticated screen is visible', {
+  vision: 'only',
+  screenshotPolicy: 'redacted-after-secrets',
+});
+```
+
+It requests a fresh, capture-bound engine attestation that every filled session
+secret is redacted throughout the returned frame, including echoes outside
+secure fields. The opt-in is not a taint reset. Missing or stale attestation
+still fails with `PIXEL_TAINTED`; secure-field masking must also be proven.
+It requires `vision: 'only'`; other modes are `INVALID_ARGUMENT`.
+Custom executors refuse it with `UNSUPPORTED_CAPABILITY`.
+`act`, `waitFor`, `extract`, MCP and subsequent assertions retain their policies.
+
+**Not implemented by the shipped web or mobile engine:** neither currently
+attests full-frame secret coverage, so this option does not yet enable
+post-secret visual judging on either engine. An artifact screenshot or a
+transition away from sign-in is not proof. Existing `visionInput` and
+`visionDegraded` fields report whether the judge actually received pixels.
+
 With `vision: true` or `'only'`, a recoverable semantic-capture failure can
 use a fresh screenshot when the engine proves masking independently. With
 `vision: false`, or after a secret fill, the capture failure stops the
