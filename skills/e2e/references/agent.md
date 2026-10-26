@@ -225,13 +225,9 @@ await agent.waitFor('the export finished and a download link appeared', { timeou
   accept absence, ask for it (`'the phone, or null when none is shown'`
   with `.nullable()`).
 
-For before-action debug captures, pass `onBeforeAction: async ({ index, source }) => { ... }`
-to `agent.act` and use only the public artifact API, such as `app.screenshot`.
-It runs once before dispatch, including replay, and may precede a failed attempt.
-Pair the captured artifact with `onAction`'s redacted summary by index within that
-call. No per-action after-image is required; keep final assertion/failure evidence
-separate. Both observers are awaited under the step deadline, must not drive the
-app, and do not relax secret or model-pixel policy.
+For a debug view that pairs each action with the screen it started on, give
+`agent.act` an `onBeforeAction` hook that calls `app.screenshot`, and match
+each capture to `onAction` by `index`. It runs before replayed actions too.
 
 `vision` on a judgment picks the evidence: `false` (default) the tree;
 `true` the tree plus a masked screenshot; `'only'` the screenshot alone, for

@@ -23,7 +23,7 @@ import { join } from 'node:path';
 import { resolveVision } from '../config/agent.ts';
 import { ConfigurationError } from '../internal/errors.ts';
 import { withAbort, withTimeout } from '../internal/time.ts';
-import type { ActionHook, BeforeActionHook, ActOptions, ActResult, AgentErrorCode, JsonValue, ModelInstance, Secret, VisionMode } from '../types.ts';
+import type { ActionHook, ActOptions, BeforeActionHook, ActResult, AgentErrorCode, JsonValue, ModelInstance, Secret, VisionMode } from '../types.ts';
 import { AgentError, CATEGORY_BY_CODE, toAgentError } from './error.ts';
 import { redactParams, validateActOptions, validateInstruction, validateParams, validateVerdict } from './act-validation.ts';
 import { ActionDispatcher } from './action-dispatcher.ts';
@@ -69,7 +69,7 @@ export interface DispatchSpec {
   readonly vision?: VisionMode;
   /** Act only: the test's hook for each completed action. */
   readonly onAction?: ActionHook | undefined;
-  /** Act only: an observer before dispatch, including replay. */
+  /** Act only: the test's hook before each action. */
   readonly onBeforeAction?: BeforeActionHook | undefined;
 }
 

@@ -111,7 +111,7 @@ export interface ActionDispatcherOptions {
   readonly trace: () => StepTraceSession | undefined;
   /** The test's `onAction` hook, handed each completed action. */
   readonly onAction?: ActionHook | undefined;
-  /** Before dispatch, using the same per-step budget index as the completion hook. */
+  /** The test's `onBeforeAction` hook, handed each action before it runs. */
   readonly onBeforeAction?: BeforeActionHook | undefined;
 }
 
@@ -281,7 +281,7 @@ export class ActionDispatcher {
       if (this.accounting.closed) throw new AgentError('CANCELLED', 'the step has ended');
       if (call.mutates) {
         this.accounting.reserveAction();
-        if (this.options.onBeforeAction !== undefined) await this.before();
+        await this.before();
         this.options.trace()?.recordGap(call.name);
       }
       const name = `${PROJECT_TOOL_EVENT_PREFIX}${call.name}`;
@@ -580,7 +580,7 @@ export class ActionDispatcher {
 
   private async runActionNow(name: GrammarActionName, body: () => Promise<RecordableAction>): Promise<void> {
     this.accounting.reserveAction();
-    if (this.options.onBeforeAction !== undefined) await this.before();
+    await this.before();
     const redaction = { redact: this.runtime.redact, redactCut: this.runtime.redactCut };
     let action: RecordableAction;
     try {
@@ -643,7 +643,7 @@ export class ActionDispatcher {
     });
   }
 
-  /** Captures an attempt's starting state without resolving or exposing an engine target. */
+  /** Hands the action about to run to the test's `onBeforeAction` hook. */
   private async before(): Promise<void> {
     const hook = this.options.onBeforeAction;
     if (hook === undefined || this.accounting.closed) return;

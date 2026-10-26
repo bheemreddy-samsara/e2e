@@ -80,38 +80,6 @@ its name and purpose only. Before the runner fills it, it checks the field
 the model picked: an enabled editable input, and a password field for a
 password. `locator.fill` runs no such check, since your code chose the field.
 
-`onBeforeAction` runs after reserving an action-budget slot and before dispatch,
-for live and replay actions and mutating project tools. It receives only the
-per-step `index` and `source`, not a target, secret value or committed summary.
-It is awaited under the step deadline; a throw stops dispatch with a message
-starting `agent.act onBeforeAction failed`. Observe only, do not drive the app
-from either observer.
-
-To align a debug card with the screen the action started on, capture through
-the public artifact API before dispatch and pair it with the existing completion
-metadata by index within this `act` call:
-
-```ts
-const before = new Map<number, string>();
-await agent.act('increment the counter twice', {
-  onBeforeAction: async ({ index }) => {
-    before.set(index, await app.screenshot(`before ${index}`));
-  },
-  onAction: ({ index, summary }) => {
-    console.log(summary, before.get(index));
-    before.delete(index);
-  },
-});
-```
-
-This takes one before-image per attempted action, not an after-image. The next
-action's image shows its own starting state; terminal assertion/failure evidence
-remains separate. A dispatch can still fail resolution, authorization or execution
-after the before-observer, with no completion callback. Compound actions and
-internal relocation retries are one dispatch, not one callback per low-level
-operation. Neither observer changes secret masking or permission for model pixels.
-No capture is added when an observer is absent.
-
 `onAction` runs after each action the step completes, once the screen
 settles, and before the next action. That includes actions the
 [replay cache](/cache) replays. The step waits for it, and its time counts
@@ -122,6 +90,18 @@ A check inside it never confirms the step's recording.
 ```ts
 await agent.act('open settings and turn on dark mode', {
   onAction: ({ index, action }) => app.screenshot(`${index} ${action}`),
+});
+```
+
+`onBeforeAction` runs before each action, replayed ones included, with the
+same `index` that action's `onAction` gets. Use it to capture the screen an
+action started on. The step waits for it, and it does not wait for the screen
+to settle first. If it throws, the step fails before the action runs. An action
+can still fail after it, with no `onAction` call.
+
+```ts
+await agent.act('open settings and turn on dark mode', {
+  onBeforeAction: ({ index }) => app.screenshot(`before ${index}`),
 });
 ```
 
@@ -523,12 +503,16 @@ export interface ActOptions extends AgentOption {
    * Observe only: drive nothing from it. A throw fails the step.
    */
   onAction?: ActionHook;
-  /** Before dispatch, awaited under the step deadline; attempted, not completed. */
+  /**
+   * Runs before each action, replayed ones included, and the step waits for
+   * it. Observe only: drive nothing from it. A throw fails the step before
+   * the action runs.
+   */
   onBeforeAction?: BeforeActionHook;
 }
 
-/** Before-dispatch identity, scoped to this act call. */
-export type BeforeActionHook = (event: Pick<ActionEvent, 'index' | 'source'>) => void | Promise<void>;
+/** The `onBeforeAction` hook of an `act` call. */
+export type BeforeActionHook = (event: BeforeActionEvent) => void | Promise<void>;
 
 /** The `onAction` hook of an `act` call. */
 export type ActionHook = (event: ActionEvent) => void | Promise<void>;
@@ -602,6 +586,14 @@ export interface ActionEvent {
   /** What the action did, secrets redacted. */
   readonly summary: string;
   /** `model` when the executor chose the action, `replay` when the cache replayed it. */
+  readonly source: 'model' | 'replay';
+}
+
+/** One action of an `act` step about to run, as `onBeforeAction` receives it. */
+export interface BeforeActionEvent {
+  /** The same `index` the action's `onAction` event carries. */
+  readonly index: number;
+  /** `model` when the executor chose the action, `replay` when the cache replays it. */
   readonly source: 'model' | 'replay';
 }
 

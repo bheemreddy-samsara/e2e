@@ -199,15 +199,15 @@ export interface ActOptions extends AgentOption {
    */
   onAction?: ActionHook;
   /**
-   * Runs before each action is dispatched, including replay. Awaited under the
-   * step deadline. Observe only: drive nothing from it. A throw stops the step
-   * before dispatch. An attempted action may still fail after this hook.
+   * Runs before each action, replayed ones included, and the step waits for
+   * it. Observe only: drive nothing from it. A throw fails the step before
+   * the action runs.
    */
   onBeforeAction?: BeforeActionHook;
 }
 
-/** Before-dispatch identity; pair it with `onAction` metadata within this `act` call. */
-export type BeforeActionHook = (event: Pick<ActionEvent, 'index' | 'source'>) => void | Promise<void>;
+/** The `onBeforeAction` hook of an `act` call. */
+export type BeforeActionHook = (event: BeforeActionEvent) => void | Promise<void>;
 
 /** The `onAction` hook of an `act` call. */
 export type ActionHook = (event: ActionEvent) => void | Promise<void>;
@@ -221,6 +221,14 @@ export interface ActionEvent {
   /** What the action did, secrets redacted. */
   readonly summary: string;
   /** `model` when the executor chose the action, `replay` when the cache replayed it. */
+  readonly source: 'model' | 'replay';
+}
+
+/** One action of an `act` step about to run, as `onBeforeAction` receives it. */
+export interface BeforeActionEvent {
+  /** The same `index` the action's `onAction` event carries. */
+  readonly index: number;
+  /** `model` when the executor chose the action, `replay` when the cache replays it. */
   readonly source: 'model' | 'replay';
 }
 
