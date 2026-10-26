@@ -198,7 +198,16 @@ export interface ActOptions extends AgentOption {
    * Observe only: drive nothing from it. A throw fails the step.
    */
   onAction?: ActionHook;
+  /**
+   * Runs before each action is dispatched, including replay. Awaited under the
+   * step deadline. Observe only: drive nothing from it. A throw stops the step
+   * before dispatch. An attempted action may still fail after this hook.
+   */
+  onBeforeAction?: BeforeActionHook;
 }
+
+/** Before-dispatch identity; pair it with `onAction` metadata within this `act` call. */
+export type BeforeActionHook = (event: Pick<ActionEvent, 'index' | 'source'>) => void | Promise<void>;
 
 /** The `onAction` hook of an `act` call. */
 export type ActionHook = (event: ActionEvent) => void | Promise<void>;

@@ -72,12 +72,45 @@ const { summary, cache } = await agent.act('Sign in', {
 | `maxModelCalls` | `number` | `agents.<name>.maxModelCalls`, 25 |
 | `agent` | `string` | the test's agent |
 | `onAction` | [`ActionHook`](#types) | none |
+| `onBeforeAction` | [`BeforeActionHook`](#types) | none |
 
 `params` values come from your code, never from the model. Wrap a value that
 differs on every run in [`unique()`](#unique). The model sees a `Secret` as
 its name and purpose only. Before the runner fills it, it checks the field
 the model picked: an enabled editable input, and a password field for a
 password. `locator.fill` runs no such check, since your code chose the field.
+
+`onBeforeAction` runs after reserving an action-budget slot and before dispatch,
+for live and replay actions and mutating project tools. It receives only the
+per-step `index` and `source`, not a target, secret value or committed summary.
+It is awaited under the step deadline; a throw stops dispatch with a message
+starting `agent.act onBeforeAction failed`. Observe only, do not drive the app
+from either observer.
+
+To align a debug card with the screen the action started on, capture through
+the public artifact API before dispatch and pair it with the existing completion
+metadata by index within this `act` call:
+
+```ts
+const before = new Map<number, string>();
+await agent.act('increment the counter twice', {
+  onBeforeAction: async ({ index }) => {
+    before.set(index, await app.screenshot(`before ${index}`));
+  },
+  onAction: ({ index, summary }) => {
+    console.log(summary, before.get(index));
+    before.delete(index);
+  },
+});
+```
+
+This takes one before-image per attempted action, not an after-image. The next
+action's image shows its own starting state; terminal assertion/failure evidence
+remains separate. A dispatch can still fail resolution, authorization or execution
+after the before-observer, with no completion callback. Compound actions and
+internal relocation retries are one dispatch, not one callback per low-level
+operation. Neither observer changes secret masking or permission for model pixels.
+No capture is added when an observer is absent.
 
 `onAction` runs after each action the step completes, once the screen
 settles, and before the next action. That includes actions the
@@ -117,7 +150,7 @@ The runner's own stops, and the checks on the call itself:
 | `MODEL_PROVIDER_FAILED` | The provider's transport failed after its retries. |
 | `MODEL_OUTPUT_INVALID` | A verdict outside the grammar. |
 | `REPLAY_STALE` | Under a strict cache, the step's recording no longer replays. |
-| `INVALID_ARGUMENT` | A malformed instruction, oversized `params`, an unknown option, an `onAction` that is not a function, or a budget above the configured limit. An unknown `agent` name fails before the step opens. |
+| `INVALID_ARGUMENT` | A malformed instruction, oversized `params`, an unknown option, an `onAction` or `onBeforeAction` that is not a function, or a budget above the configured limit. An unknown `agent` name fails before the step opens. |
 | `UNSUPPORTED_CAPABILITY` | `schema` or `vision`, which `act` does not take. |
 
 ### agent.assert
@@ -490,7 +523,12 @@ export interface ActOptions extends AgentOption {
    * Observe only: drive nothing from it. A throw fails the step.
    */
   onAction?: ActionHook;
+  /** Before dispatch, awaited under the step deadline; attempted, not completed. */
+  onBeforeAction?: BeforeActionHook;
 }
+
+/** Before-dispatch identity, scoped to this act call. */
+export type BeforeActionHook = (event: Pick<ActionEvent, 'index' | 'source'>) => void | Promise<void>;
 
 /** The `onAction` hook of an `act` call. */
 export type ActionHook = (event: ActionEvent) => void | Promise<void>;
