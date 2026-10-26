@@ -227,7 +227,9 @@ await agent.waitFor('the export finished and a download link appeared', { timeou
 
 For a debug view that pairs each action with the screen it started on, give
 `agent.act` an `onBeforeAction` hook that calls `app.screenshot`, and match
-each capture to `onAction` by `index`. It runs before replayed actions too.
+each capture to `onAction` by `index`, which restarts at 1 in each `act` call.
+It runs before replayed actions too, does not wait for the screen to settle,
+and a failed action gets a capture but no `onAction`.
 
 `vision` on a judgment picks the evidence: `false` (default) the tree;
 `true` the tree plus a masked screenshot; `'only'` the screenshot alone, for

@@ -96,8 +96,9 @@ await agent.act('open settings and turn on dark mode', {
 `onBeforeAction` runs before each action, replayed ones included, with the
 same `index` that action's `onAction` gets. Use it to capture the screen an
 action started on. The step waits for it, and it does not wait for the screen
-to settle first. If it throws, the step fails before the action runs. An action
-can still fail after it, with no `onAction` call.
+to settle first. If it throws, the step fails before the action runs, with a
+message that starts with `agent.act onBeforeAction failed`. An action can still
+fail after it, with no `onAction` call.
 
 ```ts
 await agent.act('open settings and turn on dark mode', {
