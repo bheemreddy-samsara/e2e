@@ -146,7 +146,8 @@ requires complete, capture-bound engine proof plus secure-field masking;
 it does not clear taint. Neither shipped web nor mobile engine supplies
 that proof yet. No other consumer gains this exception.
 
-After any secret fill, no pixels reach a model for the rest of the attempt:
+By default, after any secret fill, no pixels reach a model for the rest of
+the attempt:
 
 - screenshot and pixel tools are unavailable,
 - an `act` or `vision: true` step whose semantic capture times out before the
@@ -156,7 +157,10 @@ The app could show the value anywhere, not only in the field's masked
 rectangle, and model input leaves your computer.
 
 Screenshots the runner keeps as artifacts stay on: `app.screenshot()`,
-`toHaveScreenshot()`, and assertion and failure screenshots.
+`toHaveScreenshot()`, and assertion and failure screenshots. The assertion's
+`screenshotPolicy` governs model input only, not these artifacts. Its separate
+report screenshot has no full-frame attestation; `screenshot: false` disables
+that assertion artifact, not other captures.
 
 <Warning>
 An artifact screenshot masks secure fields only. If the app shows the value

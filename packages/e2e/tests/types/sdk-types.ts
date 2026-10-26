@@ -550,6 +550,12 @@ await agent.act('pick the red pin', { vision: 'only' });
 await agent.assert('the chart trends upward', { vision: true });
 await agent.assert('the form is not covered', { vision: 'only' });
 await agent.assert('the signed-in page is visible', { vision: 'only', screenshotPolicy: 'redacted-after-secrets' });
+// @ts-expect-error post-secret policy requires screenshot-only vision
+await agent.assert('ready', { vision: true, screenshotPolicy: 'redacted-after-secrets' });
+// @ts-expect-error post-secret policy cannot disable vision
+await agent.assert('ready', { vision: false, screenshotPolicy: 'redacted-after-secrets' });
+// @ts-expect-error post-secret policy requires explicit vision
+await agent.assert('ready', { screenshotPolicy: 'redacted-after-secrets' });
 // @ts-expect-error screenshot policy is assertion-only
 await agent.waitFor('ready', { vision: 'only', screenshotPolicy: 'redacted-after-secrets' });
 // @ts-expect-error no unsafe screenshot policy

@@ -437,6 +437,19 @@ Pixels are withheld, and the tree is sent alone, when:
 
 In `'only'` mode those cases fail with `POLICY_DENIED` instead.
 
+With `vision: true` or `'only'`, a recoverable semantic-capture failure can
+use a fresh screenshot when the engine proves masking independently. With
+`vision: false`, or after a secret fill, the capture failure stops the
+judgment before any model call: a missing tree cannot support a judgment
+about an empty screen.
+
+If capture fails before a judgment, the report records zero model calls and
+omits `observationRevision` and `explanation`. The step error describes the
+capture failure. An answer the closed grammar rejects is a `schema` event on
+the step and earns one repair round. When the repaired answer is rejected
+too, the step fails with `MODEL_OUTPUT_INVALID`, and its `explanation` is the
+rejection.
+
 ### Post-secret assertion policy
 
 Only the built-in `agent.assert` accepts this opt-in:
@@ -451,7 +464,8 @@ await agent.assert('the authenticated screen is visible', {
 It requests a fresh, capture-bound engine attestation that every filled session
 secret is redacted throughout the returned frame, including echoes outside
 secure fields. The opt-in is not a taint reset. Missing or stale attestation
-still fails with `PIXEL_TAINTED`; secure-field masking must also be proven.
+still fails with `POLICY_DENIED` and records `visionDegraded: "PIXEL_TAINTED"`;
+secure-field masking must also be proven.
 It requires `vision: 'only'`; other modes are `INVALID_ARGUMENT`.
 Custom executors refuse it with `UNSUPPORTED_CAPABILITY`.
 `act`, `waitFor`, `extract`, MCP and subsequent assertions retain their policies.
@@ -462,18 +476,16 @@ post-secret visual judging on either engine. An artifact screenshot or a
 transition away from sign-in is not proof. Existing `visionInput` and
 `visionDegraded` fields report whether the judge actually received pixels.
 
-With `vision: true` or `'only'`, a recoverable semantic-capture failure can
-use a fresh screenshot when the engine proves masking independently. With
-`vision: false`, or after a secret fill, the capture failure stops the
-judgment before any model call: a missing tree cannot support a judgment
-about an empty screen.
+This policy applies only to model-input pixels captured with a semantic tree.
+After a secret fill, semantic-capture failure still stops the judgment before
+any model call. Pixel fallback is intentionally unavailable, even with this
+opt-in.
 
-If capture fails before a judgment, the report records zero model calls and
-omits `observationRevision` and `explanation`. The step error describes the
-capture failure. An answer the closed grammar rejects is a `schema` event on
-the step and earns one repair round. When the repaired answer is rejected
-too, the step fails with `MODEL_OUTPUT_INVALID`, and its `explanation` is the
-rejection.
+The separate report screenshot controlled by `screenshot` does not carry this
+attestation. It masks secure fields only and may contain secret echoes
+elsewhere. Set `screenshot: false` to disable that assertion artifact; other
+[artifact captures](/reference/security#screenshots-after-a-secret-fill) retain
+their existing behavior.
 
 ## Types
 
@@ -526,12 +538,19 @@ export interface AgentOption {
 }
 
 /** `assert` options: one judgment plus one repair round, within `timeout`. */
-export interface AssertOptions extends VisionOption, AgentOption {
+export type AssertOptions = AgentOption & {
   /** Deadline in milliseconds; defaults to the agent's `judgmentTimeout`, 30000. */
   timeout?: number;
-  /** Attach a redacted screenshot to the step; on by default. */
+  /** Attach a secure-field-masked report screenshot to the step; on by default. Separate from model input. */
   screenshot?: boolean;
-}
+} & (
+  | (VisionOption & { screenshotPolicy?: never })
+  | {
+      vision: 'only';
+      /** Require capture-bound engine proof of full-frame secret redaction after a fill. No shipped engine currently supplies this proof. */
+      screenshotPolicy: 'redacted-after-secrets';
+    }
+);
 
 /** `waitFor` options: a judgment at most once per `interval` until `timeout`. */
 export interface WaitForOptions extends VisionOption, AgentOption {

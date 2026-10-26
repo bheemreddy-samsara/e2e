@@ -879,6 +879,7 @@ export interface EngineDisposeContext extends EngineCleanupContext {
 | [`treeUnavailable`](#pixel-fallback) | `true` |
 | `pixels` | `ObservationPixels` |
 | `maskedRegionCount` | `number` |
+| `secretRedaction` | `{ readonly challenge: string; readonly complete: true }` |
 
 A built-in assertion opting into post-secret pixels may pass
 `EngineObserveOptions.secretRedactionChallenge`, a new opaque string for
@@ -942,14 +943,18 @@ export interface EngineSnapshot {
   readonly treeUnavailable?: true;
   /** Masked pixels, when requested and producible; omitted otherwise. */
   readonly pixels?: ObservationPixels;
+  /** Complete full-frame redaction of filled session secrets, bound to this capture's requested challenge. Omit when coverage is uncertain. */
+  readonly secretRedaction?: { readonly challenge: string; readonly complete: true };
   /** Regions masked in `pixels`; the harness checks it covers every secure node. */
   readonly maskedRegionCount?: number;
 }
 
 export interface EngineObserveOptions {
+  /** Opaque request id for full-frame redaction of all filled session secrets. Omit `secretRedaction` from the snapshot if unsupported. */
+  readonly secretRedactionChallenge?: string;
   /** Requests masked viewport pixels for the same revision as the tree. */
   readonly pixels?: boolean;
-  /** Permits independently masked pixels to replace a failed semantic capture. */
+  /** Permits independently masked pixels to replace a failed semantic capture. Never granted after a secret fill, including with the assertion opt-in. */
   readonly pixelFallback?: boolean;
   /** The pixels are compared against a stored screenshot: hold system chrome (a status bar's clock and battery) in a fixed state where the platform can. */
   readonly comparable?: boolean;

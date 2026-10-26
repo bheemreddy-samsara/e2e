@@ -230,6 +230,9 @@ await agent.waitFor('the export finished and a download link appeared', { timeou
 complete, capture-bound engine redaction evidence and never resets secret
 taint. The shipped web and mobile engines cannot supply that evidence yet;
 do not use this as a workaround for `PIXEL_TAINTED`. Custom executors reject it.
+Post-secret semantic-capture failures still cannot fall back to pixels. The
+separate report screenshot has only secure-field masking, not full-frame
+attestation; `screenshot: false` disables that assertion artifact.
 
 `vision` on a judgment picks the evidence: `false` (default) the tree;
 `true` the tree plus a masked screenshot; `'only'` the screenshot alone, for

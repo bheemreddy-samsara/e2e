@@ -148,14 +148,19 @@ export interface AgentOption {
 }
 
 /** `assert` options: one judgment plus one repair round, within `timeout`. */
-export interface AssertOptions extends VisionOption, AgentOption {
-  /** Require capture-bound engine proof of full-frame secret redaction after a fill. Requires `vision: 'only'`; no shipped engine currently supplies this proof. */
-  screenshotPolicy?: 'redacted-after-secrets';
+export type AssertOptions = AgentOption & {
   /** Deadline in milliseconds; defaults to the agent's `judgmentTimeout`, 30000. */
   timeout?: number;
-  /** Attach a redacted screenshot to the step; on by default. */
+  /** Attach a secure-field-masked report screenshot to the step; on by default. Separate from model input. */
   screenshot?: boolean;
-}
+} & (
+  | (VisionOption & { screenshotPolicy?: never })
+  | {
+      vision: 'only';
+      /** Require capture-bound engine proof of full-frame secret redaction after a fill. No shipped engine currently supplies this proof. */
+      screenshotPolicy: 'redacted-after-secrets';
+    }
+);
 
 /** `waitFor` options: a judgment at most once per `interval` until `timeout`. */
 export interface WaitForOptions extends VisionOption, AgentOption {

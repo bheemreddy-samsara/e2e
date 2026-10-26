@@ -104,6 +104,33 @@ describe('capture-bound post-secret assertion policy', () => {
     expect(run.steps[0]).toMatchObject({ status: 'failed', visionDegraded: 'PIXEL_TAINTED' });
   });
 
+  it('accepts a retried capture carrying its own fresh proof', async () => {
+    let first = true;
+    const run = await exercise(options => {
+      if (first) {
+        first = false;
+        throw new EngineError('NODE_STALE', 'capture raced', { retryable: true });
+      }
+      return options.secretRedactionChallenge;
+    });
+    expect(run.challenges).toHaveLength(2);
+    expect(new Set(run.challenges).size).toBe(2);
+    expect(run.result.status).toBe('passed');
+    expect(run.steps[0]).toMatchObject({ status: 'passed', visionInput: true, visionOnly: true });
+    expect(run.calls).toHaveLength(1);
+    expect(run.calls[0]!.images).toHaveLength(1);
+  });
+
+  it('keeps pixel fallback disabled after a secret fill, even with the opt-in', async () => {
+    const run = await exercise(options => {
+      expect(options.pixelFallback).not.toBe(true);
+      throw new EngineError('OPERATION_TIMEOUT', 'semantic capture unavailable', { retryable: false });
+    });
+    expect(run.challenges).toHaveLength(1);
+    expect(run.steps[0]).toMatchObject({ status: 'failed', error: { code: 'POLICY_DENIED' } });
+    expect(run.calls).toHaveLength(0);
+  });
+
   it('still requires every secure field to be masked', async () => {
     const run = await exercise(options => options.secretRedactionChallenge, OPT_IN, undefined, 0);
     expect(run.steps[0]).toMatchObject({ status: 'failed', visionDegraded: 'MASKING_UNPROVEN' });

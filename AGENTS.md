@@ -541,9 +541,10 @@ trees, on both platforms, without a device.
     redacted node tree), masked pixels only when masking is proven and no
     secret was filled, and the sanitized prior-step records. Once a secret is
     filled the viewport stays pixel-tainted for the rest of the attempt. An
-    explicitly opted-in built-in assertion may receive only a capture-bound
-    engine attestation of complete full-frame secret redaction, with secure
-    masking still proven. This never clears taint or relaxes other consumers;
+    explicitly opted-in built-in assertion may receive pixels only when its
+    capture carries a capture-bound engine attestation of complete full-frame
+    secret redaction, with secure-field masking still proven. This never clears
+    taint or relaxes other consumers;
     shipped engines do not yet provide that attestation. A
     secret an engine resolves for an option the app sees (basic auth) is
     protected as text only: redacted everywhere text goes, pixels untouched.

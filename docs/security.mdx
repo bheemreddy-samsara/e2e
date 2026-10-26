@@ -16,15 +16,16 @@ A `Secret` is a handle with no plaintext accessor. The model sees only its
 name and purpose. When the model asks to fill one, the runner checks the
 field and types the value itself.
 
-After a secret fill, the model gets no screenshots for the rest of the
-attempt, because the app could show the value anywhere. Every known secret value becomes
-`<secret:name>` in model input, reports, console output, and `.txt`,
+By default, after a secret fill, the model gets no screenshots for the rest
+of the attempt, because the app could show the value anywhere. Every known
+secret value becomes `<secret:name>` in model input, reports, console output, and `.txt`,
 `.csv`, `.json`, `.html`, and `.htm` downloads.
 
 The built-in assertion has an explicit
 [`redacted-after-secrets` policy](/reference/agent#post-secret-assertion-policy).
 It accepts only an engine's complete, capture-bound full-frame redaction
-attestation plus proven secure-field masking. It never clears session taint.
+attestation plus proven secure-field masking. Only then may it send those
+redacted assertion pixels to the model. It never clears session taint.
 The shipped web and mobile engines do not yet provide that attestation.
 
 ## What can still leak
