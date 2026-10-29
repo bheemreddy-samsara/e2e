@@ -344,8 +344,8 @@ importers:
         specifier: 26.6.5
         version: 26.6.5
       agent-device:
-        specifier: 0.21.33
-        version: 0.21.33(ai@7.0.153(zod@4.6.7))
+        specifier: 0.21.34
+        version: 0.21.34(ai@7.0.153(zod@4.6.7))
       ai:
         specifier: 7.0.153
         version: 7.0.153(zod@4.6.7)
@@ -599,8 +599,8 @@ importers:
   packages/limrun:
     dependencies:
       agent-device:
-        specifier: 0.21.33
-        version: 0.21.33(ai@7.0.134(zod@4.6.7))
+        specifier: 0.21.34
+        version: 0.21.34(ai@7.0.134(zod@4.6.7))
     devDependencies:
       '@e2e-dev/mobile':
         specifier: workspace:*
@@ -624,8 +624,8 @@ importers:
   packages/mobile:
     dependencies:
       agent-device:
-        specifier: 0.21.33
-        version: 0.21.33(ai@7.0.153(zod@4.6.7))
+        specifier: 0.21.34
+        version: 0.21.34(ai@7.0.153(zod@4.6.7))
       pngjs:
         specifier: 7.0.0
         version: 7.0.0
@@ -679,8 +679,8 @@ importers:
         specifier: 0.21.33
         version: 0.21.33
       agent-device:
-        specifier: 0.21.33
-        version: 0.21.33(ai@7.0.134(zod@4.6.7))
+        specifier: 0.21.34
+        version: 0.21.34(ai@7.0.134(zod@4.6.7))
     devDependencies:
       '@e2e-dev/mobile':
         specifier: workspace:*
@@ -2775,8 +2775,8 @@ packages:
     engines: {node: '>=18.18'}
     hasBin: true
 
-  agent-device@0.21.33:
-    resolution: {integrity: sha512-MNCJLSOQLnqAmWU3IsLBBij55aZDgFAPPsos6817C1OSx3k/FHN6XaKUNz8OYyMKXme3PRYFqephrbW2KlRAoQ==}
+  agent-device@0.21.34:
+    resolution: {integrity: sha512-D6HSO9gdunBfIkhGjCblS2/cY0bHM6u5+r5VwgNM94qJx26jqHg8H5AOhM7yzEi/Bn8V5GUIMaWL/PLb2k6yVQ==}
     engines: {node: '>=22.12'}
     hasBin: true
     peerDependencies:
@@ -6760,11 +6760,11 @@ snapshots:
 
   agent-cli-detector@0.1.7: {}
 
-  agent-device@0.21.33(ai@7.0.134(zod@4.6.7)):
+  agent-device@0.21.34(ai@7.0.134(zod@4.6.7)):
     optionalDependencies:
       ai: 7.0.134(zod@4.6.7)
 
-  agent-device@0.21.33(ai@7.0.153(zod@4.6.7)):
+  agent-device@0.21.34(ai@7.0.153(zod@4.6.7)):
     optionalDependencies:
       ai: 7.0.153(zod@4.6.7)
 

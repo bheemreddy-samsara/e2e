@@ -88,6 +88,6 @@
   },
   "dependencies": {
     "@agent-device/testmu": "0.21.33",
-    "agent-device": "0.21.33"
+    "agent-device": "0.21.34"
   }
 }
